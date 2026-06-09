@@ -41,8 +41,8 @@ export default function SetupPage() {
   };
 
   const handleGenerate = async () => {
-    if (!url || files.length === 0) {
-      alert('กรุณากรอก URL และอัปโหลดไฟล์ความต้องการอย่างน้อย 1 ไฟล์');
+    if (!url) {
+          alert('กรุณากรอก URL ของระบบที่ต้องการทดสอบ');
       return;
     }
     setIsGenerating(true);
@@ -107,7 +107,7 @@ export default function SetupPage() {
 
   const stepItems: { key: keyof StepState; label: string }[] = [
     { key: 'connecting', label: 'Connecting to Localhost' },
-    { key: 'reading', label: 'Reading Context Specification File(s)' },
+        { key: 'reading', label: 'Reading Context Specification File(s) (Optional)' },
     { key: 'fetching', label: 'Fetching Accessibility Snapshot via MCP' },
     { key: 'writing', label: 'Writing Playwright Scripts & Criteria with GitHub Copilot' },
   ];
@@ -149,7 +149,7 @@ export default function SetupPage() {
 
       {/* File Uploader */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">
-        <label className="block text-sm font-medium text-gray-700">อัปโหลดไฟล์ความต้องการ (.md / .txt)</label>
+        <label className="block text-sm font-medium text-gray-700">อัปโหลดไฟล์ความต้องการ (.md / .txt) (ไม่บังคับ)</label>
         <div
           onDrop={handleDrop}
           onDragOver={e => { e.preventDefault(); setIsDragging(true); }}

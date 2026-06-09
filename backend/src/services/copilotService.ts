@@ -24,6 +24,10 @@ const toJsonObject = (value: string): CopilotResponse => {
 };
 
 const buildPrompt = (payload: CopilotRequest): string => {
+  const specificationText = payload.specification.trim().length
+    ? payload.specification
+    : "No requirement specification file was provided. Derive a safe smoke test from the accessibility snapshot and target URL.";
+
   return [
     "You are generating Playwright test scripts for a localhost web app.",
     "Follow the requirement files as the highest priority source of truth.",
@@ -38,7 +42,7 @@ const buildPrompt = (payload: CopilotRequest): string => {
     `Target URL: ${payload.targetUrl}`,
     "",
     "[Requirement Specification]",
-    payload.specification,
+    specificationText,
     "",
     "[Accessibility Snapshot]",
     payload.accessibilitySnapshot,

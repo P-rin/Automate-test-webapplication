@@ -9,7 +9,10 @@ const ALLOWED_EXT = new Set([".md", ".txt"]);
 
 export const readSpecFiles = (files: Express.Multer.File[]): ReadSpecResult => {
   if (!files.length) {
-    throw new Error("At least one .md or .txt file is required");
+    return {
+      combinedText: "",
+      fileNames: [],
+    };
   }
 
   const fileNames: string[] = [];
