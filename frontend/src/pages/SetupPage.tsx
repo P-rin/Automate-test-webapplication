@@ -22,7 +22,37 @@ export default function SetupPage() {
     connecting: 'idle', reading: 'idle', fetching: 'idle', writing: 'idle',
   });
   const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const saveGeneratedArtifact = async (generated: {
+    title?: string;
+    type?: 'UI' | 'API';
+    criteria?: string[];
+    script?: string;
+  }) => {
+    const res = await fetch(`${BACKEND_URL}/api/save-generated`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectName: projectName || url,
+        url,
+        generated: {
+          title: generated.title,
+          type: generated.type,
+          criteria: generated.criteria ?? [],
+          script: generated.script,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || 'save-generated failed');
+    }
+
+    return res.json() as Promise<{ id: string }>;
+  };
 
   const handleFileAdd = (newFiles: FileList | null) => {
     if (!newFiles) return;
@@ -47,6 +77,7 @@ export default function SetupPage() {
     }
     setIsGenerating(true);
     setGeneratedCode('');
+    setSaveStatus('');
     setSteps({ connecting: 'loading', reading: 'idle', fetching: 'idle', writing: 'idle' });
 
     try {
@@ -74,6 +105,22 @@ export default function SetupPage() {
       const data = await res.json();
       setStep('writing', 'done');
       setGeneratedCode(data.script || '');
+
+      // Auto-save after generate so the testcase appears in management immediately.
+      if (data?.script && data?.title) {
+        setIsSaving(true);
+        try {
+          await saveGeneratedArtifact(data);
+          setSaveStatus('สร้างและบันทึก Test Case ลงระบบแล้ว');
+        } catch (saveErr) {
+          console.error(saveErr);
+          const message = saveErr instanceof Error ? saveErr.message : 'unknown save error';
+          setSaveStatus('สร้างสำเร็จ แต่บันทึกลง Firebase ไม่สำเร็จ กรุณาตรวจสอบ backend/.env แล้วลองใหม่');
+          alert(`สร้าง Script สำเร็จ แต่บันทึก Test Case ไม่สำเร็จ\n${message}`);
+        } finally {
+          setIsSaving(false);
+        }
+      }
     } catch (err) {
       console.error(err);
       const failedStep = steps.writing === 'loading' ? 'writing'
@@ -89,13 +136,14 @@ export default function SetupPage() {
     if (!generatedCode) return;
     setIsSaving(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/save-test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, projectName: projectName || url, script: generatedCode }),
+      await saveGeneratedArtifact({
+        title: `Generated test - ${projectName || url}`,
+        type: 'UI',
+        criteria: [],
+        script: generatedCode,
       });
-      if (!res.ok) throw new Error(await res.text());
       alert('บันทึกลงฐานข้อมูลเรียบร้อยแล้ว!');
+      setSaveStatus('บันทึก Test Case ลงระบบเรียบร้อยแล้ว');
       navigate('/test-cases');
     } catch (err) {
       console.error(err);
@@ -222,6 +270,11 @@ export default function SetupPage() {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-700">โค้ด Playwright Script ที่สร้างได้</h3>
           </div>
+          {saveStatus && (
+            <p className={`text-xs ${saveStatus.includes('ไม่สำเร็จ') ? 'text-amber-600' : 'text-green-600'}`}>
+              {saveStatus}
+            </p>
+          )}
           <pre className="bg-gray-900 text-green-300 rounded-lg p-4 text-xs overflow-x-auto whitespace-pre-wrap max-h-96">
             {generatedCode}
           </pre>
@@ -230,7 +283,7 @@ export default function SetupPage() {
             disabled={isSaving}
             className="w-full bg-green-600 text-white py-2.5 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
           >
-            {isSaving ? 'กำลังบันทึก...' : '💾 บันทึกลงฐานข้อมูล (Save to Database)'}
+            {isSaving ? 'กำลังบันทึก...' : '💾 บันทึกอีกครั้ง (Save Again)'}
           </button>
         </div>
       )}

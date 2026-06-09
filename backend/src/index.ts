@@ -6,9 +6,23 @@ import { apiRouter } from "./routes/api.js";
 
 const app = express();
 
+const localhostOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+
 app.use(
   cors({
-    origin: env.frontendOrigin,
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      if (origin === env.frontendOrigin || localhostOriginPattern.test(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   }),
 );

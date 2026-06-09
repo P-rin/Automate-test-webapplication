@@ -1,6 +1,9 @@
 import { config } from "dotenv";
+import path from "node:path";
 
-config();
+// Load from root .env first (shared config), then backend/.env can override
+config({ path: path.resolve(process.cwd(), "..", ".env") });
+config({ override: false }); // backend/.env as optional local override
 
 const asBool = (value: string | undefined, fallback: boolean): boolean => {
   if (value == null || value.trim() === "") return fallback;

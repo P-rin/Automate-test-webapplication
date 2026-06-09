@@ -61,6 +61,12 @@ export const updateTestCaseStatus = async (
   });
 };
 
+export const updateTestCaseScript = async (testCaseId: string, script: string): Promise<void> => {
+  await db.collection("testCases").doc(testCaseId).update({
+    script,
+  });
+};
+
 export const artifactToSavePayload = (
   artifact: GeneratedArtifact,
   projectName: string,

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { TestCase, Project } from '../types';
 
@@ -66,8 +66,22 @@ export default function TestCasesPage() {
 
   const handleSaveEdit = async () => {
     if (!editingCase) return;
-    await updateDoc(doc(db, 'testCases', editingCase.id), { script: editedScript });
-    setEditingCase(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/test-case-script`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testCaseId: editingCase.id, script: editedScript }),
+      });
+
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+
+      setEditingCase(null);
+    } catch (err) {
+      console.error(err);
+      alert('เกิดข้อผิดพลาดในการบันทึกการแก้ไข');
+    }
   };
 
   const statusBadge = (status: string) => {

@@ -1,4 +1,6 @@
 import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import type { Auth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 // TODO: Replace with actual Firebase config from environment variables
@@ -13,3 +15,16 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+
+let authInstance: Auth | null = null;
+let initError: string | null = null;
+
+try {
+  authInstance = getAuth(app);
+} catch (error) {
+  const message = error instanceof Error ? error.message : 'Unknown Firebase Auth init error';
+  initError = `Firebase Auth init failed: ${message}`;
+}
+
+export const auth = authInstance;
+export const firebaseInitError = initError;

@@ -1,4 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { signOut } from 'firebase/auth';
+import { useAuth } from '../context/AuthContext';
+import { auth } from '../lib/firebase';
 
 const navItems = [
   { to: '/', label: '🏠 แดชบอร์ด', exact: true },
@@ -7,6 +10,19 @@ const navItems = [
 ];
 
 export default function Layout() {
+  const { user } = useAuth();
+
+  const handleLogout = async () => {
+    if (!auth) return;
+
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error(err);
+      alert('ออกจากระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Top Nav */}
@@ -25,6 +41,18 @@ export default function Layout() {
               {item.label}
             </NavLink>
           ))}
+
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-xs text-gray-500 max-w-44 truncate" title={user?.email || ''}>
+              {user?.displayName || user?.email}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100"
+            >
+              ออกจากระบบ
+            </button>
+          </div>
         </div>
       </nav>
 

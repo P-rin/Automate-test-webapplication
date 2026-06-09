@@ -6,7 +6,7 @@ import { generateWithCopilot } from "../services/copilotService.js";
 import { startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
 import { readSpecFiles } from "../services/specReader.js";
-import { artifactToSavePayload, saveGeneratedTestCase } from "../services/testCaseService.js";
+import { artifactToSavePayload, saveGeneratedTestCase, updateTestCaseScript } from "../services/testCaseService.js";
 import { isLocalhostUrl } from "../utils/project.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 10 } });
@@ -24,7 +24,34 @@ const executeSchema = z.object({
   testCaseIds: z.array(z.string().min(1)).min(1),
 });
 
+const updateScriptSchema = z.object({
+  testCaseId: z.string().min(1),
+  script: z.string().min(1),
+});
+
 export const apiRouter = Router();
+
+const toClientError = (error: unknown): { status: number; message: string } => {
+  const message = error instanceof Error ? error.message : "Unknown error";
+
+  if (message.includes("Unable to detect a Project Id")) {
+    return {
+      status: 503,
+      message:
+        "Firebase is not configured. Please set FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY in backend .env",
+    };
+  }
+
+  if (message.includes("Could not load the default credentials")) {
+    return {
+      status: 503,
+      message:
+        "Firebase credentials are missing. Please set FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY in backend .env or GOOGLE_APPLICATION_CREDENTIALS",
+    };
+  }
+
+  return { status: 500, message };
+};
 
 apiRouter.get("/health", (_req, res) => {
   res.json({ status: "ok" });
@@ -78,8 +105,8 @@ apiRouter.post("/save-test", async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return res.status(500).json({ error: message });
+    const mapped = toClientError(error);
+    return res.status(mapped.status).json({ error: mapped.message });
   }
 });
 
@@ -119,7 +146,21 @@ apiRouter.post("/save-generated", async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return res.status(500).json({ error: message });
+    const mapped = toClientError(error);
+    return res.status(mapped.status).json({ error: mapped.message });
+  }
+});
+
+apiRouter.patch("/test-case-script", async (req, res) => {
+  try {
+    const payload = updateScriptSchema.parse(req.body);
+    await updateTestCaseScript(payload.testCaseId, payload.script);
+    return res.status(204).send();
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
+    }
+    const mapped = toClientError(error);
+    return res.status(mapped.status).json({ error: mapped.message });
   }
 });
