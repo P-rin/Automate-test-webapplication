@@ -1,6 +1,8 @@
 import OpenAI from "openai";
 import type { GeneratedArtifact } from "../types.js";
 
+type LlmProvider = "auto" | "copilot" | "github-models";
+
 interface CopilotRequest {
   projectName: string;
   targetUrl: string;
@@ -13,6 +15,15 @@ interface CopilotResponse {
   type?: "UI" | "API";
   criteria?: string[];
   script?: string;
+}
+
+interface LlmGenerationOptions {
+  provider?: string;
+  apiToken?: string;
+  copilotApiUrl?: string;
+  githubModelsApiUrl?: string;
+  copilotModel?: string;
+  githubModelsModel?: string;
 }
 
 const toJsonObject = (value: string): CopilotResponse => {
@@ -63,22 +74,39 @@ const fallbackArtifact = (projectName: string, url: string): GeneratedArtifact =
     `});\n`,
 });
 
-export const generateWithCopilot = async (
-  payload: CopilotRequest,
-  apiUrl?: string,
-  apiToken?: string,
-  model = "gpt-4.1",
-): Promise<GeneratedArtifact> => {
-  if (!apiToken) {
-    return fallbackArtifact(payload.projectName, payload.targetUrl);
-  }
+const isUnsupportedTokenError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("checking third-party user token") ||
+    lower.includes("personal access tokens are not supported") ||
+    lower.includes("third-party user token")
+  );
+};
 
-  const prompt = buildPrompt(payload);
-  const client = new OpenAI({
-    apiKey: apiToken,
-    baseURL: apiUrl,
+const isPatToken = (token: string): boolean => {
+  return token.startsWith("ghp_") || token.startsWith("github_pat_");
+};
+
+const asProvider = (provider: string | undefined): LlmProvider => {
+  const raw = (provider ?? "auto").trim().toLowerCase();
+  if (raw === "copilot" || raw === "github-models") return raw;
+  return "auto";
+};
+
+const createClient = (apiKey: string, baseURL?: string): OpenAI => {
+  return new OpenAI({
+    apiKey,
+    baseURL,
   });
+};
 
+const callChatModel = async (
+  client: OpenAI,
+  model: string,
+  prompt: string,
+  systemInstruction: string,
+): Promise<string> => {
   const completion = await client.chat.completions.create({
     model,
     temperature: 0.1,
@@ -86,7 +114,7 @@ export const generateWithCopilot = async (
     messages: [
       {
         role: "system",
-        content: "You are GitHub Copilot for software test generation.",
+        content: systemInstruction,
       },
       {
         role: "user",
@@ -97,7 +125,55 @@ export const generateWithCopilot = async (
 
   const rawText = completion.choices[0]?.message?.content;
   if (!rawText) {
-    throw new Error("Copilot SDK returned empty content");
+    throw new Error("Model SDK returned empty content");
+  }
+
+  return rawText;
+};
+
+export const generateWithCopilot = async (
+  payload: CopilotRequest,
+  options: LlmGenerationOptions = {},
+): Promise<GeneratedArtifact> => {
+  const apiToken = options.apiToken;
+  if (!apiToken) {
+    return fallbackArtifact(payload.projectName, payload.targetUrl);
+  }
+
+  const prompt = buildPrompt(payload);
+  const provider = asProvider(options.provider);
+  const resolvedProvider: Exclude<LlmProvider, "auto"> =
+    provider === "auto"
+      ? (isPatToken(apiToken) ? "github-models" : "copilot")
+      : provider;
+
+  const copilotModel = options.copilotModel ?? "gpt-4.1";
+  const githubModelsModel = options.githubModelsModel ?? "openai/gpt-4.1";
+
+  const runWithCopilot = async (): Promise<string> => {
+    const client = createClient(apiToken, options.copilotApiUrl);
+    return callChatModel(client, copilotModel, prompt, "You are GitHub Copilot for software test generation.");
+  };
+
+  const runWithGitHubModels = async (): Promise<string> => {
+    const client = createClient(apiToken, options.githubModelsApiUrl);
+    return callChatModel(client, githubModelsModel, prompt, "You are an expert QA engineer for Playwright test generation.");
+  };
+
+  let rawText = "";
+  try {
+    rawText = resolvedProvider === "github-models" ? await runWithGitHubModels() : await runWithCopilot();
+  } catch (error) {
+    if (isUnsupportedTokenError(error) && provider === "auto") {
+      try {
+        rawText = await runWithGitHubModels();
+      } catch {
+        // If both providers fail, keep backward-compatible behavior to avoid breaking generation flow.
+        return fallbackArtifact(payload.projectName, payload.targetUrl);
+      }
+    } else {
+      throw error;
+    }
   }
 
   const data = toJsonObject(rawText);

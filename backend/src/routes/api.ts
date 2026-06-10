@@ -68,7 +68,7 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
 
     const files = (req.files ?? []) as Express.Multer.File[];
     const { combinedText, fileNames } = readSpecFiles(files);
-    const snapshot = await fetchAccessibilitySnapshot(targetUrl);
+    const snapshot = await fetchAccessibilitySnapshot(targetUrl, combinedText);
 
     const artifact = await generateWithCopilot(
       {
@@ -77,9 +77,14 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
         specification: combinedText,
         accessibilitySnapshot: snapshot,
       },
-      env.copilotApiUrl,
-      env.copilotApiToken,
-      env.copilotModel,
+      {
+        provider: env.llmProvider,
+        apiToken: env.copilotApiToken,
+        copilotApiUrl: env.copilotApiUrl,
+        githubModelsApiUrl: env.githubModelsApiUrl,
+        copilotModel: env.copilotModel,
+        githubModelsModel: env.githubModelsModel,
+      },
     );
 
     return res.json({
