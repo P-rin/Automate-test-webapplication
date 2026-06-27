@@ -131,7 +131,7 @@ const runPlaywright = async (cwd: string): Promise<{ stdout: string; stderr: str
       ["playwright", "test", "--config", "playwright.config.ts"],
       {
         cwd,
-        shell: false,
+        shell: true,
         windowsHide: true,
       },
     );
