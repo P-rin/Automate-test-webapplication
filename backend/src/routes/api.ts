@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { env } from "../config/env.js";
-import { generateWithCopilot } from "../services/copilotService.js";
+import { generateTestsTwoPass } from "../services/copilotService.js";
 import { startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
 import { readSpecFiles } from "../services/specReader.js";
@@ -70,7 +70,7 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
     const { combinedText, fileNames } = readSpecFiles(files);
     const snapshot = await fetchAccessibilitySnapshot(targetUrl, combinedText);
 
-    const artifact = await generateWithCopilot(
+    const generatedTests = await generateTestsTwoPass(
       {
         projectName,
         targetUrl,
@@ -87,8 +87,22 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
       },
     );
 
+    const primary = generatedTests[0] ?? {
+      id: "TC-001",
+      title: `Smoke test - ${projectName}`,
+      script: `import { test, expect } from '@playwright/test';\n\n` +
+        `test('smoke: ${projectName}', async ({ page }) => {\n` +
+        `  await page.goto('${targetUrl}');\n` +
+        `  await expect(page).toHaveTitle(/.+/);\n` +
+        `});\n`,
+    };
+
     return res.json({
-      ...artifact,
+      title: primary.title,
+      type: "UI",
+      criteria: [],
+      script: primary.script,
+      generatedTests,
       source: {
         projectName,
         targetUrl,

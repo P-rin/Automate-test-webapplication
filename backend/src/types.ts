@@ -20,3 +20,18 @@ export interface GeneratedArtifact {
   criteria: string[];
   script: string;
 }
+
+export interface TestPlan {
+  id: string;
+  title: string;
+  description: string;
+  type: TestCaseKind;
+  testSteps: string[];
+  expectedResult: string;
+}
+
+export interface GeneratedTestCase {
+  id: string;
+  title: string;
+  script: string;
+}
