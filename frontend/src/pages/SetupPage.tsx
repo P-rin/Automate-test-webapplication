@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 interface StepState {
@@ -12,12 +12,17 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
 export default function SetupPage() {
   const navigate = useNavigate();
-  const [url, setUrl] = useState('http://localhost:3000');
+  const [url, setUrl] = useState('https://example.com');
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [projectName, setProjectName] = useState('');
+  const [jobId, setJobId] = useState('');
+  const [jobStatus, setJobStatus] = useState('');
+  const [jobPercentage, setJobPercentage] = useState(0);
+  const [jobMessage, setJobMessage] = useState('');
+  const [jobError, setJobError] = useState('');
   const [steps, setSteps] = useState<StepState>({
     connecting: 'idle', reading: 'idle', fetching: 'idle', writing: 'idle',
   });
@@ -72,12 +77,18 @@ export default function SetupPage() {
 
   const handleGenerate = async () => {
     if (!url) {
-          alert('กรุณากรอก URL ของระบบที่ต้องการทดสอบ');
+      alert('กรุณากรอก URL ของระบบที่ต้องการทดสอบ');
       return;
     }
+
     setIsGenerating(true);
     setGeneratedCode('');
     setSaveStatus('');
+    setJobId('');
+    setJobStatus('');
+    setJobPercentage(0);
+    setJobMessage('');
+    setJobError('');
     setSteps({ connecting: 'loading', reading: 'idle', fetching: 'idle', writing: 'idle' });
 
     try {
@@ -87,50 +98,85 @@ export default function SetupPage() {
       files.forEach(f => formData.append('files', f));
 
       setStep('connecting', 'done');
-      setStep('reading', 'loading');
+      setStep('reading', 'done');
+      setStep('fetching', 'loading');
 
-      const res = await fetch(`${BACKEND_URL}/api/generate`, {
+      const res = await fetch(`${BACKEND_URL}/api/generate-job`, {
         method: 'POST',
         body: formData,
       });
 
-      setStep('reading', 'done');
-      setStep('fetching', 'loading');
-
-      if (!res.ok) throw new Error(await res.text());
-
       setStep('fetching', 'done');
-      setStep('writing', 'loading');
+
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
 
       const data = await res.json();
-      setStep('writing', 'done');
-      setGeneratedCode(data.script || '');
+      setJobId(data.jobId);
+      setJobStatus(data.status ?? 'pending');
+      setJobMessage('Job accepted and running in background');
 
-      // Auto-save after generate so the testcase appears in management immediately.
-      if (data?.script && data?.title) {
-        setIsSaving(true);
-        try {
-          await saveGeneratedArtifact(data);
-          setSaveStatus('สร้างและบันทึก Test Case ลงระบบแล้ว');
-        } catch (saveErr) {
-          console.error(saveErr);
-          const message = saveErr instanceof Error ? saveErr.message : 'unknown save error';
-          setSaveStatus('สร้างสำเร็จ แต่บันทึกลง Firebase ไม่สำเร็จ กรุณาตรวจสอบ backend/.env แล้วลองใหม่');
-          alert(`สร้าง Script สำเร็จ แต่บันทึก Test Case ไม่สำเร็จ\n${message}`);
-        } finally {
-          setIsSaving(false);
-        }
-      }
+      setStep('writing', 'loading');
     } catch (err) {
       console.error(err);
-      const failedStep = steps.writing === 'loading' ? 'writing'
-        : steps.fetching === 'loading' ? 'fetching'
-        : steps.reading === 'loading' ? 'reading' : 'connecting';
-      setStep(failedStep, 'error');
+      setStep('fetching', 'error');
+      const message = err instanceof Error ? err.message : String(err);
+      alert(`เกิดข้อผิดพลาดระหว่างส่งงาน: ${message}`);
     } finally {
       setIsGenerating(false);
     }
   };
+
+  useEffect(() => {
+    if (!jobId) return;
+
+    let isCancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const pollJobStatus = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/generation-jobs/${jobId}`);
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+
+        const data = await res.json() as {
+          status?: string;
+          percentage?: number;
+          message?: string;
+          errorMessage?: string;
+        };
+
+        if (isCancelled) return;
+
+        setJobStatus(data.status ?? 'pending');
+        setJobPercentage(data.percentage ?? 0);
+        setJobMessage(data.message ?? '');
+        setJobError(data.errorMessage ?? '');
+
+        if (data.status === 'completed') {
+          setStep('writing', 'done');
+        } else if (data.status === 'failed') {
+          setStep('writing', 'error');
+        } else {
+          timeoutId = setTimeout(pollJobStatus, 1500);
+        }
+      } catch (error) {
+        if (isCancelled) return;
+        console.error(error);
+        setJobError(error instanceof Error ? error.message : 'Failed to load job status');
+        setStep('writing', 'error');
+      }
+    };
+
+    void pollJobStatus();
+
+    return () => {
+      isCancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [jobId]);
 
   const handleSave = async () => {
     if (!generatedCode) return;
@@ -154,7 +200,7 @@ export default function SetupPage() {
   };
 
   const stepItems: { key: keyof StepState; label: string }[] = [
-    { key: 'connecting', label: 'Connecting to Localhost' },
+    { key: 'connecting', label: 'Connecting to Target Website' },
         { key: 'reading', label: 'Reading Context Specification File(s) (Optional)' },
     { key: 'fetching', label: 'Fetching Accessibility Snapshot via MCP' },
     { key: 'writing', label: 'Writing Playwright Scripts & Criteria with GitHub Copilot' },
@@ -190,7 +236,7 @@ export default function SetupPage() {
           type="url"
           value={url}
           onChange={e => setUrl(e.target.value)}
-          placeholder="http://localhost:3000"
+          placeholder="https://example.com"
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
@@ -246,6 +292,22 @@ export default function SetupPage() {
       >
         {isGenerating ? 'กำลังประมวลผล...' : '🚀 สร้างชุดทดสอบ (Generate Test Cases)'}
       </button>
+
+      {jobId && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 mt-4">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">สถานะงานหลังบ้าน (Background Job)</h3>
+          <div className="text-sm text-gray-700 space-y-2">
+            <p><span className="font-medium">Job ID:</span> {jobId}</p>
+            <p><span className="font-medium">สถานะ:</span> {jobStatus || 'pending'}</p>
+            <p><span className="font-medium">ความคืบหน้า:</span> {jobPercentage}%</p>
+            <p><span className="font-medium">ข้อความ:</span> {jobMessage || 'กำลังรอการประมวลผล'}</p>
+            {jobError && <p className="text-red-600"><span className="font-medium">ข้อผิดพลาด:</span> {jobError}</p>}
+          </div>
+          <div className="w-full bg-gray-100 rounded-full h-2 mt-3 overflow-hidden">
+            <div className="h-2 bg-blue-600" style={{ width: `${Math.min(jobPercentage, 100)}%` }} />
+          </div>
+        </div>
+      )}
 
       {/* Live Stepper */}
       {(isGenerating || Object.values(steps).some(s => s !== 'idle')) && (

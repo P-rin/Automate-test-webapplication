@@ -1,0 +1,39 @@
+[
+  {
+    "timestamp": "2026-07-01T03:22:26.052Z",
+    "level": "info",
+    "message": "Testing CORS headers..."
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.255Z",
+    "level": "info",
+    "message": "CORS response headers",
+    "data": {
+      "access-control-allow-credentials": "true"
+    }
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.265Z",
+    "level": "error",
+    "message": "CORS test failed",
+    "data": {
+      "name": "Error",
+      "message": "\u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32mtrue\u001b[39m\nReceived: \u001b[31m[Function ok]\u001b[39m",
+      "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32mtrue\u001b[39m\nReceived: \u001b[31m[Function ok]\u001b[39m\n    at C:\\Users\\User\\Desktop\\Git repo\\Automate test webapplication.worktrees\\copilot-worktree-2026-07-01T03-18-50\\backend\\src\\tests\\backend-connection.test.ts:48:27"
+    },
+    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32mtrue\u001b[39m\nReceived: \u001b[31m[Function ok]\u001b[39m\n    at C:\\Users\\User\\Desktop\\Git repo\\Automate test webapplication.worktrees\\copilot-worktree-2026-07-01T03-18-50\\backend\\src\\tests\\backend-connection.test.ts:48:27"
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.320Z",
+    "level": "info",
+    "message": "Backend Connection Tests Summary",
+    "data": {
+      "totalTests": 7,
+      "logsGenerated": 3,
+      "errorCount": 1,
+      "warningCount": 0,
+      "successCount": 0,
+      "infoCount": 2
+    }
+  }
+]

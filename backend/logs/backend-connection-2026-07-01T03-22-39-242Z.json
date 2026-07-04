@@ -1,0 +1,39 @@
+[
+  {
+    "timestamp": "2026-07-01T03:22:39.348Z",
+    "level": "info",
+    "message": "Testing JSON payload handling..."
+  },
+  {
+    "timestamp": "2026-07-01T03:22:39.477Z",
+    "level": "info",
+    "message": "Save test response",
+    "data": {
+      "status": 201,
+      "response": {
+        "id": "7J9vo1YLSTgGrMoDPIre"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-01T03:22:39.479Z",
+    "level": "success",
+    "message": "JSON payload processed successfully",
+    "data": {
+      "id": "7J9vo1YLSTgGrMoDPIre"
+    }
+  },
+  {
+    "timestamp": "2026-07-01T03:22:39.510Z",
+    "level": "info",
+    "message": "Backend Connection Tests Summary",
+    "data": {
+      "totalTests": 7,
+      "logsGenerated": 3,
+      "errorCount": 0,
+      "warningCount": 0,
+      "successCount": 1,
+      "infoCount": 2
+    }
+  }
+]

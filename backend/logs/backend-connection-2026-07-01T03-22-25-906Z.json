@@ -1,0 +1,34 @@
+[
+  {
+    "timestamp": "2026-07-01T03:22:26.013Z",
+    "level": "info",
+    "message": "Testing invalid endpoint handling..."
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.072Z",
+    "level": "info",
+    "message": "Invalid endpoint response",
+    "data": {
+      "status": 404,
+      "statusText": "Not Found"
+    }
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.083Z",
+    "level": "success",
+    "message": "Invalid endpoint handled correctly with 404"
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.103Z",
+    "level": "info",
+    "message": "Backend Connection Tests Summary",
+    "data": {
+      "totalTests": 7,
+      "logsGenerated": 3,
+      "errorCount": 0,
+      "warningCount": 0,
+      "successCount": 1,
+      "infoCount": 2
+    }
+  }
+]

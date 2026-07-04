@@ -3,11 +3,12 @@ import multer from "multer";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { generateTestsTwoPass } from "../services/copilotService.js";
+import { createGenerationJob, getGenerationJob, processGenerateJob } from "../services/generationJobService.js";
 import { startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
 import { readSpecFiles } from "../services/specReader.js";
 import { artifactToSavePayload, saveGeneratedTestCase, updateTestCaseScript } from "../services/testCaseService.js";
-import { isLocalhostUrl } from "../utils/project.js";
+import { isValidTargetUrl } from "../utils/project.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 10 } });
 
@@ -62,8 +63,8 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
 
-    if (!isLocalhostUrl(targetUrl)) {
-      return res.status(400).json({ error: "Only localhost URLs are allowed" });
+    if (!isValidTargetUrl(targetUrl)) {
+      return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
     }
 
     const files = (req.files ?? []) as Express.Multer.File[];
@@ -84,6 +85,7 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
         githubModelsApiUrl: env.githubModelsApiUrl,
         copilotModel: env.copilotModel,
         githubModelsModel: env.githubModelsModel,
+        maxPromptChars: env.llmMaxPromptChars,
       },
     );
 
@@ -109,6 +111,55 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
         files: fileNames,
       },
     });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(500).json({ error: message });
+  }
+});
+
+apiRouter.get("/generation-jobs/:jobId", async (req, res) => {
+  try {
+    const job = await getGenerationJob(req.params.jobId);
+    return res.json(job);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(404).json({ error: message });
+  }
+});
+
+apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
+  try {
+    const targetUrl = String(req.body.url ?? "");
+    const projectName = String(req.body.projectName ?? targetUrl);
+
+    if (!isValidTargetUrl(targetUrl)) {
+      return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
+    }
+
+    const files = (req.files ?? []) as Express.Multer.File[];
+    const { combinedText } = readSpecFiles(files);
+
+    const jobId = await createGenerationJob({
+      projectName,
+      targetUrl,
+      specification: combinedText,
+    });
+
+    void processGenerateJob(jobId, {
+      projectName,
+      targetUrl,
+      specification: combinedText,
+    }, {
+      provider: env.llmProvider,
+      apiToken: env.copilotApiToken,
+      copilotApiUrl: env.copilotApiUrl,
+      githubModelsApiUrl: env.githubModelsApiUrl,
+      copilotModel: env.copilotModel,
+      githubModelsModel: env.githubModelsModel,
+      maxPromptChars: env.llmMaxPromptChars,
+    });
+
+    return res.status(202).json({ jobId, status: "accepted" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return res.status(500).json({ error: message });

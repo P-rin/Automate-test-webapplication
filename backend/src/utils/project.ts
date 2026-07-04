@@ -7,11 +7,13 @@ export const toProjectId = (projectName: string): string => {
     .slice(0, 64) || "project";
 };
 
-export const isLocalhostUrl = (value: string): boolean => {
+export const isValidTargetUrl = (value: string): boolean => {
   try {
     const parsed = new URL(value);
-    return ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+    return ["http:", "https:"].includes(parsed.protocol);
   } catch {
     return false;
   }
 };
+
+export const isLocalhostUrl = (value: string): boolean => isValidTargetUrl(value);

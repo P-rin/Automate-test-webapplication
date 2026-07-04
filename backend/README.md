@@ -44,6 +44,7 @@ Environment keys:
 - `GITHUB_MODELS_MODEL` = model for github-models provider
 - `PLAYWRIGHT_EXPLORE_MAX_SNAPSHOTS` = max number of snapshots to collect during MCP exploration
 - `PLAYWRIGHT_EXPLORE_MAX_CANDIDATES` = max number of clickable candidates to explore after the base snapshot
+- `PLAYWRIGHT_EXPLORE_MAX_DEPTH` = max crawl depth for internal route exploration
 
 3. Start dev server:
 
@@ -59,5 +60,14 @@ Default backend URL: `http://localhost:4000`.
 - Screenshot evidence stays on local disk at `backend/storage/screenshots` and is exposed by Express static middleware.
 - Accessibility snapshots are collected through Playwright MCP (`@playwright/mcp`) from the backend service.
 - Generation now uses multi-step MCP exploration rather than a single snapshot: initial page, credential-driven login attempt when credentials are found in uploaded specs, then additional navigation snapshots from important buttons/links.
+- Backend can be configured with environment variables to control MCP startup:
+  - `PLAYWRIGHT_MCP_COMMAND` — custom command to launch MCP server (default `npx`)
+  - `PLAYWRIGHT_MCP_ARGS` — optional CLI args array for the MCP command
+  - `PLAYWRIGHT_MCP_BROWSER` — browser selection (`chrome`, `firefox`, `webkit`, `msedge`)
+  - `PLAYWRIGHT_MCP_ISOLATED` — if `true`, enables isolated MCP sessions
+  - `PLAYWRIGHT_MCP_USER_DATA_DIR` — custom user data directory for Playwright MCP
+  - `PLAYWRIGHT_MCP_STORAGE_STATE` — path to a storage state file for initial session state
+  - `PLAYWRIGHT_HEADLESS` — `true` or `false` to control headless mode
+  - `PLAYWRIGHT_EXPLORE_MAX_DEPTH` — maximum navigation depth for internal route crawling
 - Frontend should subscribe with Firestore `onSnapshot` to collections `testCases` and `testRuns` for real-time updates.
 - If provider authentication fails and generation cannot continue, backend falls back to a deterministic smoke test script so users can keep testing the execution flow.

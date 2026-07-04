@@ -1,0 +1,34 @@
+[
+  {
+    "timestamp": "2026-07-01T03:22:26.043Z",
+    "level": "info",
+    "message": "Testing request validation..."
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.257Z",
+    "level": "info",
+    "message": "Validation response",
+    "data": {
+      "status": 400,
+      "error": "Invalid payload"
+    }
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.265Z",
+    "level": "success",
+    "message": "Validation error handled correctly"
+  },
+  {
+    "timestamp": "2026-07-01T03:22:26.302Z",
+    "level": "info",
+    "message": "Backend Connection Tests Summary",
+    "data": {
+      "totalTests": 7,
+      "logsGenerated": 3,
+      "errorCount": 0,
+      "warningCount": 0,
+      "successCount": 1,
+      "infoCount": 2
+    }
+  }
+]

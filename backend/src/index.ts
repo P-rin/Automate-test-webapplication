@@ -28,6 +28,15 @@ app.use(
 );
 app.use(express.json({ limit: "2mb" }));
 
+app.use((req, res, next) => {
+  res.setTimeout(env.requestTimeoutMs, () => {
+    if (!res.headersSent) {
+      res.status(504).json({ error: "Request timed out" });
+    }
+  });
+  next();
+});
+
 app.use(
   "/static/screenshots",
   express.static(path.resolve(process.cwd(), "storage", "screenshots"), {
@@ -37,6 +46,9 @@ app.use(
 
 app.use("/api", apiRouter);
 
-app.listen(env.port, () => {
+const server = app.listen(env.port, () => {
   console.log(`Backend listening on http://localhost:${env.port}`);
 });
+
+// Ensure the Node HTTP server socket timeout matches the application timeout
+server.timeout = env.requestTimeoutMs;

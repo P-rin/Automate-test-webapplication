@@ -23,29 +23,190 @@ interface GeneratorResponse {
   script?: string;
 }
 
-interface LlmGenerationOptions {
+export interface LlmGenerationOptions {
   provider?: string;
   apiToken?: string;
   copilotApiUrl?: string;
   githubModelsApiUrl?: string;
   copilotModel?: string;
   githubModelsModel?: string;
+  maxPromptChars?: number;
 }
 
-const toJsonArray = <T>(value: string): T[] => {
-  const parsed = JSON.parse(value) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new Error("Copilot planner response is not a JSON array");
+const DEFAULT_LLM_MAX_PROMPT_CHARS = 14000;
+
+const truncateText = (text: string, maxLength: number, label: string): string => {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}\n\n[Truncated ${text.length - maxLength} characters from ${label}]`;
+};
+
+export const parseJsonArrayResponse = <T>(value: string): T[] => {
+  const normalized = value.trim();
+  const fencedMatch = normalized.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = fencedMatch ? fencedMatch[1].trim() : normalized;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Copilot planner response is not a valid JSON payload: ${message}`);
   }
-  return parsed as T[];
+
+  if (Array.isArray(parsed)) {
+    return parsed as T[];
+  }
+
+  if (typeof parsed === "object" && parsed != null && !Array.isArray(parsed)) {
+    const record = parsed as Record<string, unknown>;
+    
+    // Try common array key names: plans, testPlans, cases, testCases, tests, items, data
+    const possibleKeys = ["plans", "testPlans", "cases", "testCases", "tests", "items", "data"];
+    for (const key of possibleKeys) {
+      const nested = record[key];
+      if (Array.isArray(nested)) {
+        return nested as T[];
+      }
+    }
+  }
+
+  throw new Error("Copilot planner response is not a JSON array or object with an array property");
+};
+
+const cleanJsonText = (value: string): string => {
+  const normalized = value.trim();
+  const fencedMatch = normalized.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fencedMatch ? fencedMatch[1].trim() : normalized;
 };
 
 const toJsonObject = <T>(value: string): T => {
-  const parsed = JSON.parse(value) as unknown;
+  const candidate = cleanJsonText(value);
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(candidate) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Copilot response is not a valid JSON object: ${message}`);
+  }
+
   if (typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) {
     throw new Error("Copilot response is not a JSON object");
   }
   return parsed as T;
+};
+
+export const validateGeneratedScript = (script: string): void => {
+  if (typeof script !== "string" || !script.trim()) {
+    throw new Error("Generated script is empty or not a string");
+  }
+
+  const trimmedScript = script.trim();
+  if (!/import\s+\{(?=[^}]*\btest\b)(?=[^}]*\bexpect\b)[^}]*\}\s+from\s+['"]@playwright\/test['"]/.test(trimmedScript)) {
+    throw new Error("Generated script must import both test and expect from '@playwright/test'.");
+  }
+
+  if (!/\b(?:test|it)(?:\s*\(|\s*\.)/.test(trimmedScript)) {
+    throw new Error("Generated script must contain at least one Playwright test block.");
+  }
+
+  const stack: string[] = [];
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBacktick = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let escape = false;
+  let lastNonWhitespace: string | null = null;
+
+  for (let i = 0; i < script.length; i += 1) {
+    const char = script[i];
+    const next = script[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") {
+        inLineComment = false;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "/" && script[i - 1] === "*") {
+        inBlockComment = false;
+      }
+      continue;
+    }
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (char === "\\" && (inSingleQuote || inDoubleQuote || inBacktick)) {
+      escape = true;
+      continue;
+    }
+
+    if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
+      if (char === "/" && next === "/") {
+        inLineComment = true;
+        continue;
+      }
+      if (char === "/" && next === "*") {
+        inBlockComment = true;
+        continue;
+      }
+    }
+
+    if (!inLineComment && !inBlockComment) {
+      if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
+        if (char === "'") {
+          inSingleQuote = true;
+          continue;
+        }
+        if (char === '"') {
+          inDoubleQuote = true;
+          continue;
+        }
+        if (char === "`") {
+          inBacktick = true;
+          continue;
+        }
+      } else if (inSingleQuote && char === "'") {
+        inSingleQuote = false;
+        continue;
+      } else if (inDoubleQuote && char === '"') {
+        inDoubleQuote = false;
+        continue;
+      } else if (inBacktick && char === "`") {
+        inBacktick = false;
+        continue;
+      }
+    }
+
+    if (!inSingleQuote && !inDoubleQuote && !inBacktick && !inLineComment && !inBlockComment) {
+      if (char === "(") {
+        stack.push(")");
+      } else if (char === "{") {
+        stack.push("}");
+      } else if (char === "[") {
+        stack.push("]");
+      } else if (char === ")" || char === "}" || char === "]") {
+        const expected = stack.pop();
+        if (expected !== char) {
+          throw new Error("Generated script contains unbalanced brackets or parentheses.");
+        }
+      }
+    }
+
+    if (!/\s/.test(char)) {
+      lastNonWhitespace = char;
+    }
+  }
+
+  if (inSingleQuote || inDoubleQuote || inBacktick || inLineComment || inBlockComment || stack.length > 0) {
+    throw new Error("Generated script contains unbalanced syntax or unfinished code blocks.");
+  }
 };
 
 const isValidTestPlan = (value: unknown): value is TestPlan => {
@@ -62,14 +223,20 @@ const isValidTestPlan = (value: unknown): value is TestPlan => {
   );
 };
 
-const buildPlannerPrompt = (payload: CopilotRequest): string => {
-  const specificationText = payload.specification.trim().length
+const buildPlannerPrompt = (payload: CopilotRequest, maxPromptChars: number): string => {
+  const maxSpecLength = Math.floor(maxPromptChars * 0.25);
+  const maxSnapshotLength = Math.floor(maxPromptChars * 0.55);
+
+  const rawSpecificationText = payload.specification.trim().length
     ? payload.specification
     : "No requirement specification file was provided. Derive a safe smoke test from the accessibility snapshot and target URL.";
 
+  const specificationText = truncateText(rawSpecificationText, maxSpecLength, "[Requirement Specification]");
+  const snapshotText = truncateText(payload.accessibilitySnapshot, maxSnapshotLength, "[Accessibility Snapshot]");
+
   return [
     "You are an expert QA Lead and Test Planner specializing in autonomous web exploration.",
-    "Your task is to analyze the provided [Requirement Specification] and use the [Accessibility Snapshot] to map out a comprehensive testing strategy for a localhost web app.",
+    "Your task is to analyze the provided [Requirement Specification] and use the [Accessibility Snapshot] to map out a comprehensive testing strategy for the target web app.",
     "",
     "[CRITICAL INSTRUCTION - EXPLORATION & COVERAGE]",
     "1. Do not limit yourself to happy paths. Actively explore elements outside the spec if they appear on the current screen.",
@@ -77,17 +244,23 @@ const buildPlannerPrompt = (payload: CopilotRequest): string => {
     "3. Formulate between 3 to 6 distinct test scenarios.",
     "",
     "[OUTPUT FORMAT]",
-    "Output ONLY a raw JSON array containing planned test cases. Do not wrap it in markdown block. Follow this structure strictly:",
-    "[",
-    "  {",
-    "    \"id\": \"TC-001\",",
-    "    \"title\": \"concise Thai/English mixed title\",",
-    "    \"description\": \"Detailed explanation\",",
-    "    \"type\": \"UI\",",
-    "    \"testSteps\": [\"step 1\", \"step 2\"],",
-    "    \"expectedResult\": \"what should happen\"",
-    "  }",
-    "]",
+    "Output ONLY a valid JSON object (not an array).",
+    "The JSON object MUST contain a single key named \"plans\".",
+    "The value of \"plans\" MUST be an array of test plan objects.",
+    "Do not wrap the JSON in markdown code blocks.",
+    "Example JSON structure:",
+    "{",
+    "  \"plans\": [",
+    "    {",
+    "      \"id\": \"TC-001\",",
+    "      \"title\": \"concise Thai/English mixed title\",",
+    "      \"description\": \"Detailed explanation\",",
+    "      \"type\": \"UI\",",
+    "      \"testSteps\": [\"step 1\", \"step 2\"],",
+    "      \"expectedResult\": \"what should happen\"",
+    "    }",
+    "  ]",
+    "}",
     "",
     `Target URL: ${payload.targetUrl}`,
     "",
@@ -95,20 +268,36 @@ const buildPlannerPrompt = (payload: CopilotRequest): string => {
     specificationText,
     "",
     "[Accessibility Snapshot]",
-    payload.accessibilitySnapshot,
+    snapshotText,
   ].join("\n");
 };
 
-const buildGeneratorPrompt = (payload: CopilotRequest, plannedCase: TestPlan): string => {
+const buildGeneratorPrompt = (payload: CopilotRequest, plannedCase: TestPlan, maxPromptChars: number): string => {
+  // Allocate carefully: 50% for snapshot, 30% for plan, 20% for instructions
+  const maxSnapshotLength = Math.floor(maxPromptChars * 0.5);
+  const snapshotText = truncateText(payload.accessibilitySnapshot, maxSnapshotLength, "[Accessibility Snapshot]");
+
   return [
     "You are an expert Automation Engineer generating strict Playwright test scripts (.spec.ts) in TypeScript.",
     "Your ONLY source of truth is the [Assigned Test Plan Object] and the [Accessibility Snapshot].",
     "",
     "[OUTPUT FORMAT]",
-    "Output ONLY raw JSON with keys: id, title, script. Do not wrap in markdown.",
-    "- id: keep the original test case ID",
-    "- title: keep the original test case title",
-    "- script: full executable Playwright test file content as an escaped JSON string (use \\n for newlines).",
+    "Output ONLY raw JSON with exact keys: id, title, script.",
+    "Do not wrap output in markdown, code fences, or additional text.",
+    "The script value must be a valid JSON string with escaped newlines (\\n) and valid TypeScript Playwright code.",
+    "The generated script should begin with: import { test, expect } from '@playwright/test';",
+    "Example output:",
+    "{",
+    "  \"id\": \"TC-001\",",
+    "  \"title\": \"Verify home page loads\",",
+    "  \"script\": \"import { test, expect } from '@playwright/test';\\n\\n",
+    "               test('verify home page loads', async ({ page }) => {\\n",
+    "                 await page.goto('https://example.com');\\n",
+    "                 await expect(page).toHaveTitle(/.+/);\\n",
+    "               });\\n\"",
+    "}",
+    "",
+    "Generate ONLY the essential test logic. Keep the script concise and focused on the test steps.",
     "",
     `Target URL: ${payload.targetUrl}`,
     "",
@@ -116,7 +305,7 @@ const buildGeneratorPrompt = (payload: CopilotRequest, plannedCase: TestPlan): s
     JSON.stringify(plannedCase, null, 2),
     "",
     "[Accessibility Snapshot]",
-    payload.accessibilitySnapshot,
+    snapshotText,
   ].join("\n");
 };
 
@@ -177,28 +366,38 @@ const callChatModel = async (
   prompt: string,
   systemInstruction: string,
 ): Promise<string> => {
-  const completion = await client.chat.completions.create({
-    model,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: systemInstruction,
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-  });
+  try {
+    const completion = await client.chat.completions.create({
+      model,
+      temperature: 0.1,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: systemInstruction,
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    });
 
-  const rawText = completion.choices[0]?.message?.content;
-  if (!rawText) {
-    throw new Error("Model SDK returned empty content");
+    const rawText = completion.choices[0]?.message?.content;
+    if (!rawText) {
+      throw new Error("Model SDK returned empty content");
+    }
+
+    return rawText;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/request body too large/i.test(message) || /413/.test(message)) {
+      throw new Error(
+        "LLM request too large for the model context window. Reduce the specification or snapshot size, or set a lower LLM_MAX_PROMPT_CHARS."
+      );
+    }
+    throw error;
   }
-
-  return rawText;
 };
 
 const getResolvedProvider = (
@@ -209,15 +408,10 @@ const getResolvedProvider = (
   return normalized === "auto" ? (isPatToken(apiToken) ? "github-models" : "copilot") : normalized;
 };
 
-export const generateTestsTwoPass = async (
-  payload: CopilotRequest,
-  options: LlmGenerationOptions = {},
-): Promise<GeneratedTestCase[]> => {
-  const apiToken = options.apiToken;
-  if (!apiToken) {
-    return [fallbackGeneratedTestCase(payload.projectName, payload.targetUrl)];
-  }
-
+const createRunContext = (
+  apiToken: string,
+  options: LlmGenerationOptions,
+) => {
   const provider = asProvider(options.provider);
   const resolvedProvider = getResolvedProvider(options.provider, apiToken);
   const copilotModel = options.copilotModel ?? "gpt-4.1";
@@ -240,7 +434,7 @@ export const generateTestsTwoPass = async (
     return runWithCopilot(prompt);
   };
 
-  const runPromptSafely = async (prompt: string): Promise<string> => {
+  return async (prompt: string): Promise<string> => {
     try {
       return await runForPrompt(prompt);
     } catch (error) {
@@ -250,29 +444,71 @@ export const generateTestsTwoPass = async (
       throw error;
     }
   };
+};
 
-  const plannerRaw = await runPromptSafely(buildPlannerPrompt(payload));
-  const plannedCases = toJsonArray<unknown>(plannerRaw).filter(isValidTestPlan);
+export const generateTestPlans = async (
+  payload: CopilotRequest,
+  options: LlmGenerationOptions = {},
+): Promise<TestPlan[]> => {
+  const apiToken = options.apiToken;
+  if (!apiToken) {
+    throw new Error("Missing API token for model generation");
+  }
+
+  const runPromptSafely = createRunContext(apiToken, options);
+  const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
+  const plannerRaw = await runPromptSafely(buildPlannerPrompt(payload, maxPromptChars));
+  const plannedCases = parseJsonArrayResponse<unknown>(plannerRaw).filter(isValidTestPlan);
+
   if (plannedCases.length === 0) {
     throw new Error("Planner response did not contain valid test plans");
   }
 
-  const generatedTests = await Promise.all(
-    plannedCases.map(async (plannedCase) => {
-      const generatorRaw = await runPromptSafely(buildGeneratorPrompt(payload, plannedCase));
-      const generated = toJsonObject<GeneratorResponse>(generatorRaw);
-      if (!generated.id || !generated.title || !generated.script) {
-        throw new Error(`Generator response missing required fields for plan ${plannedCase.id}`);
-      }
-      return {
-        id: generated.id,
-        title: generated.title,
-        script: generated.script,
-      };
-    }),
-  );
+  return plannedCases;
+};
 
-  return generatedTests;
+export const generateSingleScript = async (
+  payload: CopilotRequest,
+  plannedCase: TestPlan,
+  options: LlmGenerationOptions = {},
+): Promise<GeneratedTestCase> => {
+  const apiToken = options.apiToken;
+  if (!apiToken) {
+    throw new Error("Missing API token for model generation");
+  }
+
+  const runPromptSafely = createRunContext(apiToken, options);
+  const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
+  const generatorRaw = await runPromptSafely(buildGeneratorPrompt(payload, plannedCase, maxPromptChars));
+  const generated = toJsonObject<GeneratorResponse>(generatorRaw);
+
+  if (!generated.id || !generated.title || !generated.script) {
+    throw new Error(`Generator response missing required fields for plan ${plannedCase.id}`);
+  }
+
+  validateGeneratedScript(generated.script);
+
+  return {
+    id: generated.id,
+    title: generated.title,
+    script: generated.script,
+  };
+};
+
+export const generateTestsTwoPass = async (
+  payload: CopilotRequest,
+  options: LlmGenerationOptions = {},
+): Promise<GeneratedTestCase[]> => {
+  const plans = await generateTestPlans(payload, options);
+  const results: GeneratedTestCase[] = [];
+
+  // Sequential execution to avoid rate limiting on free tier API plans
+  for (const plannedCase of plans) {
+    const script = await generateSingleScript(payload, plannedCase, options);
+    results.push(script);
+  }
+
+  return results;
 };
 
 export const generateWithCopilot = async (

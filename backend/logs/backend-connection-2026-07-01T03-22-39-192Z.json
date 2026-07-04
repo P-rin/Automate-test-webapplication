@@ -1,0 +1,31 @@
+[
+  {
+    "timestamp": "2026-07-01T03:22:39.275Z",
+    "level": "info",
+    "message": "Starting backend health check..."
+  },
+  {
+    "timestamp": "2026-07-01T03:22:39.337Z",
+    "level": "success",
+    "message": "Backend health check passed",
+    "data": {
+      "status": 200,
+      "response": {
+        "status": "ok"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-01T03:22:39.378Z",
+    "level": "info",
+    "message": "Backend Connection Tests Summary",
+    "data": {
+      "totalTests": 7,
+      "logsGenerated": 2,
+      "errorCount": 0,
+      "warningCount": 0,
+      "successCount": 1,
+      "infoCount": 1
+    }
+  }
+]

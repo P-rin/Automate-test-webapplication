@@ -1,0 +1,25 @@
+[
+  {
+    "timestamp": "2026-07-01T03:22:39.364Z",
+    "level": "info",
+    "message": "Testing timeout handling..."
+  },
+  {
+    "timestamp": "2026-07-01T03:22:39.433Z",
+    "level": "success",
+    "message": "Request completed within timeout"
+  },
+  {
+    "timestamp": "2026-07-01T03:22:39.464Z",
+    "level": "info",
+    "message": "Backend Connection Tests Summary",
+    "data": {
+      "totalTests": 7,
+      "logsGenerated": 2,
+      "errorCount": 0,
+      "warningCount": 0,
+      "successCount": 1,
+      "infoCount": 1
+    }
+  }
+]
