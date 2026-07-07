@@ -30,6 +30,7 @@ const asList = (value: string | undefined): string[] => {
 
 export const env = {
   port: Number(process.env.PORT ?? 4000),
+  screenshotHost: process.env.SCREENSHOT_HOST ?? "localhost",
   frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://localhost:5173",
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID,
   firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL,
