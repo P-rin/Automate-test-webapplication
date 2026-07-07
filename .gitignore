@@ -1,3 +1,21 @@
 0Context fot this project/
 backend/.playwright-mcp/
 backend/storage
+
+# Environment files and local overrides
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.local
+
+# Common secret / credential artifacts
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+*.der
+*service-account*.json
+*credentials*.json

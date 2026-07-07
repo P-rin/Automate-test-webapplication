@@ -134,10 +134,12 @@ const restoreBrowserSessionState = async (client: Client, state: BrowserSessionS
   await client.callTool({
     name: "browser_evaluate",
     arguments: {
-      function: `(${JSON.stringify(state)}) => {
-        Object.entries(arguments[0].localStorage).forEach(([key, value]) => window.localStorage.setItem(key, value));
-        Object.entries(arguments[0].sessionStorage).forEach(([key, value]) => window.sessionStorage.setItem(key, value));
-        document.cookie = arguments[0].cookie || "";
+      function: `(state) => {
+        Object.entries(state.localStorage || {}).forEach(([key, value]) => window.localStorage.setItem(key, value));
+        Object.entries(state.sessionStorage || {}).forEach(([key, value]) => window.sessionStorage.setItem(key, value));
+        if (state.cookie) {
+          document.cookie = state.cookie;
+        }
       }`,
       args: [state],
     },
@@ -213,7 +215,12 @@ const crawlInternalRoutes = async (
 
     try {
       if (authState) {
-        await restoreBrowserSessionState(client, authState);
+        try {
+          await restoreBrowserSessionState(client, authState);
+        } catch (authError) {
+          console.error(`crawlInternalRoutes: failed to restore auth state for ${currentUrl}:`, authError instanceof Error ? authError.message : authError);
+          throw authError;
+        }
       }
 
       await client.callTool({ name: "browser_navigate", arguments: { url: currentUrl } });

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { db, FieldValue } from "../lib/firestore.js";
+import { env } from "../config/env.js";
 import { getTestCasesByIds, updateTestCaseStatus } from "./testCaseService.js";
 import type { ExecutionTestCase } from "./testCaseService.js";
 
@@ -22,6 +23,7 @@ interface PlaywrightJsonReport {
         }>;
       }>;
     }>;
+    suites?: Array<any>;
   }>;
 }
 
@@ -58,13 +60,14 @@ const buildRunnerFiles = async (runId: string, scripts: string[]): Promise<{ run
   return { runDir, reportPath, outputDir };
 };
 
-const parseReport = (report: PlaywrightJsonReport): { passCount: number; failCount: number; errors: string[]; duration: number } => {
+const countResultsRecursive = (suite: any): { passCount: number; failCount: number; errors: string[] } => {
   let passCount = 0;
   let failCount = 0;
   const errors: string[] = [];
 
-  for (const suite of report.suites ?? []) {
-    for (const spec of suite.specs ?? []) {
+  // Count results at current suite level
+  if (suite.specs) {
+    for (const spec of suite.specs) {
       for (const test of spec.tests ?? []) {
         for (const result of test.results ?? []) {
           if (result.status === "passed") passCount += 1;
@@ -78,6 +81,31 @@ const parseReport = (report: PlaywrightJsonReport): { passCount: number; failCou
         }
       }
     }
+  }
+
+  // Recursively count results in nested suites
+  if (suite.suites) {
+    for (const nestedSuite of suite.suites) {
+      const nested = countResultsRecursive(nestedSuite);
+      passCount += nested.passCount;
+      failCount += nested.failCount;
+      errors.push(...nested.errors);
+    }
+  }
+
+  return { passCount, failCount, errors };
+};
+
+const parseReport = (report: PlaywrightJsonReport): { passCount: number; failCount: number; errors: string[]; duration: number } => {
+  let passCount = 0;
+  let failCount = 0;
+  const errors: string[] = [];
+
+  for (const suite of report.suites ?? []) {
+    const result = countResultsRecursive(suite);
+    passCount += result.passCount;
+    failCount += result.failCount;
+    errors.push(...result.errors);
   }
 
   return {
@@ -106,29 +134,37 @@ const collectPngFiles = async (dir: string): Promise<string[]> => {
   return found;
 };
 
-const publishScreenshots = async (runId: string, outputDir: string): Promise<string[]> => {
+const getScreenshotBaseUrl = (port: number): string => {
+  return `http://${env.screenshotHost}:${port}/static/screenshots`;
+};
+
+const publishScreenshots = async (runId: string, outputDir: string, port: number): Promise<string[]> => {
   const pngPaths = await collectPngFiles(outputDir);
   if (!pngPaths.length) return [];
 
   const runShotDir = path.join(screenshotRoot, runId);
   await fs.mkdir(runShotDir, { recursive: true });
 
+  const baseUrl = getScreenshotBaseUrl(port);
   const links: string[] = [];
   for (const source of pngPaths) {
     const fileName = `${uuidv4()}.png`;
     const destination = path.join(runShotDir, fileName);
     await fs.copyFile(source, destination);
-    links.push(`http://localhost:4000/static/screenshots/${runId}/${fileName}`);
+    links.push(`${baseUrl}/${runId}/${fileName}`);
   }
 
   return links;
 };
 
-const runPlaywright = async (cwd: string): Promise<{ stdout: string; stderr: string; code: number | null }> => {
+const runPlaywright = async (cwd: string, pattern?: string): Promise<{ stdout: string; stderr: string; code: number | null }> => {
   return new Promise((resolve) => {
+    const args = ["playwright", "test", "--config", "playwright.config.ts"];
+    if (pattern) args.push(pattern);
+
     const child = spawn(
       process.platform === "win32" ? "npx.cmd" : "npx",
-      ["playwright", "test", "--config", "playwright.config.ts"],
+      args,
       {
         cwd,
         shell: true,
@@ -158,6 +194,18 @@ export const startExecution = async (testCaseIds: string[]): Promise<{ runId: st
     throw new Error("No valid test cases found for execution");
   }
 
+  // Check if there's already a running job
+  const runningJobs = await db
+    .collection("testRuns")
+    .where("status", "==", "running")
+    .where("testCaseIds", "array-contains-any", testCaseIds)
+    .limit(1)
+    .get();
+
+  if (!runningJobs.empty) {
+    throw new Error("A test run is already in progress for one or more of these test cases. Please wait for it to complete.");
+  }
+
   const projectName = String(cases[0].projectName ?? "Unknown Project");
 
   const runRef = await db.collection("testRuns").add({
@@ -165,6 +213,7 @@ export const startExecution = async (testCaseIds: string[]): Promise<{ runId: st
     projectName,
     testCaseIds,
     status: "running",
+    isRunning: true,
     passCount: 0,
     failCount: 0,
     totalDuration: 0,
@@ -184,41 +233,103 @@ export const startExecution = async (testCaseIds: string[]): Promise<{ runId: st
   return { runId: runRef.id };
 };
 
+interface TestCaseResult {
+  testCaseId: string;
+  passed: boolean;
+  errors: string[];
+  duration: number;
+}
+
 const executeInBackground = async (runId: string, cases: ExecutionTestCase[]) => {
   try {
-    const scripts = cases.map((item) => item.script);
     const testCaseIds = cases.map((item) => item.id);
+    const scripts = cases.map((item) => item.script);
 
-    const { runDir, reportPath, outputDir } = await buildRunnerFiles(runId, scripts);
-    const runResult = await runPlaywright(runDir);
+    const { runDir, outputDir } = await buildRunnerFiles(runId, scripts);
 
-    const rawReport = await fs.readFile(reportPath, "utf-8").catch(() => "{}");
-    const parsed = parseReport(JSON.parse(rawReport) as PlaywrightJsonReport);
+    // Run tests sequentially, one test file per case
+    const results: TestCaseResult[] = [];
+    let totalDuration = 0;
+    const allErrors: string[] = [];
+    const allLogs: string[] = [];
 
-    const screenshotUrls = await publishScreenshots(runId, outputDir);
-    const status = parsed.failCount > 0 || runResult.code !== 0 ? "failed" : "completed";
+    for (let i = 0; i < testCaseIds.length; i += 1) {
+      const testCaseId = testCaseIds[i];
+      const filePattern = `generated-${i + 1}.spec.ts`;
 
-    const combinedLogs = [runResult.stdout, runResult.stderr].filter(Boolean).join("\n").slice(0, 100_000);
+      // Create individual report path for this test
+      const individualReportPath = path.join(runDir, `report-${i + 1}.json`);
+      const individualConfig = [
+        "import { defineConfig } from '@playwright/test';",
+        "",
+        "export default defineConfig({",
+        "  testDir: './tests',",
+        "  timeout: 60_000,",
+        "  use: {",
+        "    screenshot: 'only-on-failure',",
+        "    trace: 'retain-on-failure',",
+        "  },",
+        `  reporter: [['json', { outputFile: './report-${i + 1}.json' }]],`,
+        "  outputDir: './test-results',",
+        "});",
+        "",
+      ].join("\n");
+
+      await fs.writeFile(path.join(runDir, "playwright.config.ts"), individualConfig, "utf-8");
+
+      // Run this test file individually
+      const runResult = await runPlaywright(runDir, filePattern);
+      allLogs.push(`[${filePattern}]\n${runResult.stdout}`);
+      if (runResult.stderr) allLogs.push(`STDERR: ${runResult.stderr}`);
+
+      // Parse report for this test
+      const rawReport = await fs.readFile(individualReportPath, "utf-8").catch(() => "{}");
+      const parsed = parseReport(JSON.parse(rawReport) as PlaywrightJsonReport);
+
+      totalDuration += parsed.duration;
+      allErrors.push(...parsed.errors);
+
+      const passed = parsed.failCount === 0 && runResult.code === 0;
+      results.push({
+        testCaseId,
+        passed,
+        errors: parsed.errors,
+        duration: parsed.duration,
+      });
+    }
+
+    // Collect all screenshots
+    const screenshotUrls = await publishScreenshots(runId, outputDir, env.port);
+
+    // Calculate aggregates
+    const passCount = results.filter((r) => r.passed).length;
+    const failCount = results.filter((r) => !r.passed).length;
+    const status = failCount > 0 ? "failed" : "completed";
+
+    const combinedLogs = allLogs.join("\n").slice(0, 100_000);
 
     await db.collection("testRuns").doc(runId).update({
       status,
-      passCount: parsed.passCount,
-      failCount: parsed.failCount,
-      totalDuration: parsed.duration,
+      isRunning: false,
+      passCount,
+      failCount,
+      totalDuration,
       logs: combinedLogs,
       screenshotUrls,
-      errorDetails: parsed.errors.join("\n").slice(0, 40_000),
+      errorDetails: allErrors.join("\n").slice(0, 40_000),
       completedAt: FieldValue.serverTimestamp(),
     });
 
-    for (let i = 0; i < testCaseIds.length; i += 1) {
-      const finalStatus = parsed.failCount > 0 ? "fail" : "pass";
-      await updateTestCaseStatus(testCaseIds[i], finalStatus);
+    // Update each test case with its individual result
+    for (const result of results) {
+      const finalStatus = result.passed ? "pass" : "fail";
+      await updateTestCaseStatus(result.testCaseId, finalStatus);
     }
   } catch (error) {
     const message = error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
     await db.collection("testRuns").doc(runId).update({
       status: "failed",
+      isRunning: false,
       logs: message.slice(0, 100_000),
       errorDetails: message.slice(0, 40_000),
       completedAt: FieldValue.serverTimestamp(),
