@@ -61,7 +61,7 @@ Default backend URL: `http://localhost:4000`.
 - Accessibility snapshots are collected through Playwright MCP (`@playwright/mcp`) from the backend service.
 - Generation now uses multi-step MCP exploration rather than a single snapshot: initial page, credential-driven login attempt when credentials are found in uploaded specs, then additional navigation snapshots from important buttons/links.
 - Backend can be configured with environment variables to control MCP startup:
-  - `PLAYWRIGHT_MCP_COMMAND` — custom command to launch MCP server (default `npx`)
+  - `PLAYWRIGHT_MCP_COMMAND` — custom command to launch MCP server (default `playwright-mcp`, `npx` is blocked)
   - `PLAYWRIGHT_MCP_ARGS` — optional CLI args array for the MCP command
   - `PLAYWRIGHT_MCP_BROWSER` — browser selection (`chrome`, `firefox`, `webkit`, `msedge`)
   - `PLAYWRIGHT_MCP_ISOLATED` — if `true`, enables isolated MCP sessions

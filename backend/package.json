@@ -11,7 +11,7 @@
     "test:run": "tsx run-tests.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.18.0",
+    "@github/copilot-sdk": "^1.0.6",
     "@playwright/test": "^1.61.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

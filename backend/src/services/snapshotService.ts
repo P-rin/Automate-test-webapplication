@@ -26,10 +26,17 @@ interface BrowserSessionState {
   cookie: string;
 }
 
-const defaultMcpCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+const defaultMcpCommand = "playwright-mcp";
+
+const normalizeCommand = (command: string): string => command.trim().toLowerCase();
+
+const isNpxCommand = (command: string): boolean => {
+  const normalized = normalizeCommand(command);
+  return normalized === "npx" || normalized === "npx.cmd";
+};
 
 const buildDefaultMcpArgs = (): string[] => {
-  const args = ["-y", "@playwright/mcp@latest"];
+  const args: string[] = [];
 
   if (env.playwrightHeadless) {
     args.push("--headless");
@@ -56,6 +63,11 @@ const buildDefaultMcpArgs = (): string[] => {
 
 const resolveMcpCommand = (): { command: string; args: string[] } => {
   const command = env.playwrightMcpCommand?.trim() || defaultMcpCommand;
+
+  if (isNpxCommand(command)) {
+    throw new Error("PLAYWRIGHT_MCP_COMMAND cannot be npx. Use a direct MCP binary (for example: playwright-mcp).");
+  }
+
   const args = env.playwrightMcpArgs.length ? env.playwrightMcpArgs : buildDefaultMcpArgs();
 
   return { command, args };
