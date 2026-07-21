@@ -53,5 +53,6 @@ export const env = {
   playwrightMcpUrl: process.env.PLAYWRIGHT_MCP_URL,
   playwrightMcpCommand: process.env.PLAYWRIGHT_MCP_COMMAND,
   playwrightMcpArgs: asList(process.env.PLAYWRIGHT_MCP_ARGS),
+  executionEngine: (process.env.EXECUTION_ENGINE ?? "playwright").toLowerCase(),
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 120000),
 };

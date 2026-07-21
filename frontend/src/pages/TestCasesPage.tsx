@@ -48,13 +48,21 @@ export default function TestCasesPage() {
     if (selectedIds.length === 0) return;
     setIsRunning(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/execute`, {
+      const res = await fetch(`${BACKEND_URL}/api/v2/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testCaseIds: selectedIds }),
+        body: JSON.stringify({ testCaseIds: selectedIds, engine: 'mcp' }),
       });
       if (!res.ok) throw new Error(await res.text());
-      alert('สั่งรันเทสเรียบร้อยแล้ว กรุณาตรวจสอบผลในหน้ารายงาน');
+      const data = await res.json() as {
+        runId: string;
+        engineRequested?: 'playwright' | 'mcp';
+        engineUsed?: 'playwright' | 'mcp';
+        fallbackReason?: string;
+      };
+
+      const fallbackLine = data.fallbackReason ? `\nFallback: ${data.fallbackReason}` : '';
+      alert(`สั่งรันเทสเรียบร้อยแล้ว\nRun ID: ${data.runId}\nEngine: ${data.engineUsed ?? 'playwright'}${fallbackLine}`);
       setSelectedIds([]);
     } catch (err) {
       console.error(err);

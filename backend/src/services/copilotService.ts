@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import type { GeneratedArtifact, GeneratedTestCase, TestPlan } from "../types.js";
 
 type LlmProvider = "auto" | "copilot" | "github-models";
@@ -31,6 +32,7 @@ export interface LlmGenerationOptions {
   copilotModel?: string;
   githubModelsModel?: string;
   maxPromptChars?: number;
+  preferCopilotSdk?: boolean;
 }
 
 const DEFAULT_LLM_MAX_PROMPT_CHARS = 14000;
@@ -360,6 +362,67 @@ const createClient = (apiKey: string, baseURL?: string): OpenAI => {
   });
 };
 
+const extractAssistantText = (content: unknown): string => {
+  if (typeof content === "string") return content;
+
+  if (Array.isArray(content)) {
+    const combined = content
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (typeof item === "object" && item != null) {
+          const value = (item as { text?: unknown }).text;
+          return typeof value === "string" ? value : "";
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+
+    return combined;
+  }
+
+  return "";
+};
+
+const callCopilotSdkModel = async (
+  apiToken: string,
+  model: string,
+  prompt: string,
+  systemInstruction: string,
+): Promise<string> => {
+  const client = new CopilotClient({
+    gitHubToken: apiToken,
+    useLoggedInUser: false,
+  });
+
+  await client.start();
+
+  try {
+    const session = await client.createSession({
+      model,
+      onPermissionRequest: approveAll,
+      systemMessage: {
+        mode: "append",
+        content: systemInstruction,
+      },
+    });
+
+    try {
+      const response = await session.sendAndWait({ prompt }, 120_000);
+      const rawText = extractAssistantText(response?.data?.content);
+      if (!rawText.trim()) {
+        throw new Error("Copilot SDK returned empty content");
+      }
+
+      return rawText;
+    } finally {
+      await session.disconnect();
+    }
+  } finally {
+    await client.stop();
+  }
+};
+
 const callChatModel = async (
   client: OpenAI,
   model: string,
@@ -416,8 +479,24 @@ const createRunContext = (
   const resolvedProvider = getResolvedProvider(options.provider, apiToken);
   const copilotModel = options.copilotModel ?? "gpt-4.1";
   const githubModelsModel = options.githubModelsModel ?? "openai/gpt-4.1";
+  const preferCopilotSdk = options.preferCopilotSdk ?? true;
 
   const runWithCopilot = async (prompt: string): Promise<string> => {
+    if (preferCopilotSdk) {
+      try {
+        return await callCopilotSdkModel(
+          apiToken,
+          copilotModel,
+          prompt,
+          "You are GitHub Copilot for software test planning and generation.",
+        );
+      } catch (error) {
+        if (provider === "copilot") {
+          throw error;
+        }
+      }
+    }
+
     const client = createClient(apiToken, options.copilotApiUrl);
     return callChatModel(client, copilotModel, prompt, "You are GitHub Copilot for software test planning and generation.");
   };

@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 
 interface StepState {
   connecting: 'idle' | 'loading' | 'done' | 'error';
@@ -9,6 +11,20 @@ interface StepState {
 }
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
+
+interface GeneratedJobTest {
+  id?: string;
+  title?: string;
+  script?: string;
+}
+
+interface GenerationJobDoc {
+  status?: string;
+  percentage?: number;
+  message?: string;
+  errorMessage?: string;
+  generatedTests?: GeneratedJobTest[];
+}
 
 export default function SetupPage() {
   const navigate = useNavigate();
@@ -101,7 +117,7 @@ export default function SetupPage() {
       setStep('reading', 'done');
       setStep('fetching', 'loading');
 
-      const res = await fetch(`${BACKEND_URL}/api/generate-job`, {
+      const res = await fetch(`${BACKEND_URL}/api/v2/generate-job`, {
         method: 'POST',
         body: formData,
       });
@@ -131,51 +147,33 @@ export default function SetupPage() {
   useEffect(() => {
     if (!jobId) return;
 
-    let isCancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = onSnapshot(doc(db, 'generationJobs', jobId), (snapshot) => {
+      if (!snapshot.exists()) {
+        setJobError('Generation job does not exist');
+        setStep('writing', 'error');
+        return;
+      }
 
-    const pollJobStatus = async () => {
-      try {
-        const res = await fetch(`${BACKEND_URL}/api/generation-jobs/${jobId}`);
-        if (!res.ok) {
-          throw new Error(await res.text());
-        }
+      const data = snapshot.data() as GenerationJobDoc;
+      setJobStatus(data.status ?? 'pending');
+      setJobPercentage(data.percentage ?? 0);
+      setJobMessage(data.message ?? '');
+      setJobError(data.errorMessage ?? '');
 
-        const data = await res.json() as {
-          status?: string;
-          percentage?: number;
-          message?: string;
-          errorMessage?: string;
-        };
+      const generatedTests = data.generatedTests ?? [];
+      const primaryScript = generatedTests.find((testCase) => typeof testCase.script === 'string' && testCase.script.trim())?.script;
+      if (primaryScript) {
+        setGeneratedCode(primaryScript);
+      }
 
-        if (isCancelled) return;
-
-        setJobStatus(data.status ?? 'pending');
-        setJobPercentage(data.percentage ?? 0);
-        setJobMessage(data.message ?? '');
-        setJobError(data.errorMessage ?? '');
-
-        if (data.status === 'completed') {
-          setStep('writing', 'done');
-        } else if (data.status === 'failed') {
-          setStep('writing', 'error');
-        } else {
-          timeoutId = setTimeout(pollJobStatus, 1500);
-        }
-      } catch (error) {
-        if (isCancelled) return;
-        console.error(error);
-        setJobError(error instanceof Error ? error.message : 'Failed to load job status');
+      if (data.status === 'completed') {
+        setStep('writing', 'done');
+      } else if (data.status === 'failed') {
         setStep('writing', 'error');
       }
-    };
+    });
 
-    void pollJobStatus();
-
-    return () => {
-      isCancelled = true;
-      if (timeoutId) clearTimeout(timeoutId);
-    };
+    return () => unsubscribe();
   }, [jobId]);
 
   const handleSave = async () => {

@@ -29,13 +29,15 @@ export default function ReportPage() {
     if (!run) return;
     setIsReRunning(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/execute`, {
+      const res = await fetch(`${BACKEND_URL}/api/v2/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testCaseIds: run.testCaseIds }),
+        body: JSON.stringify({ testCaseIds: run.testCaseIds, engine: run.engineRequested ?? 'mcp' }),
       });
       if (!res.ok) throw new Error(await res.text());
-      alert('สั่งรันซ้ำเรียบร้อยแล้ว');
+      const data = await res.json() as { runId?: string; engineUsed?: string; fallbackReason?: string };
+      const fallbackLine = data.fallbackReason ? `\nFallback: ${data.fallbackReason}` : '';
+      alert(`สั่งรันซ้ำเรียบร้อยแล้ว\nRun ID: ${data.runId ?? '-'}\nEngine: ${data.engineUsed ?? 'playwright'}${fallbackLine}`);
     } catch (err) {
       console.error(err);
       alert('เกิดข้อผิดพลาด');
@@ -53,6 +55,10 @@ export default function ReportPage() {
   ];
   const COLORS = ['#22c55e', '#ef4444'];
   const duration = run.totalDuration ? `${(run.totalDuration / 1000).toFixed(1)} วินาที` : '-';
+  const unsupportedCount = (run.caseResults ?? []).reduce((total, item) => {
+    const count = item.errors.filter((error) => error.includes('UNSUPPORTED_STEP')).length;
+    return total + count;
+  }, 0);
 
   return (
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
@@ -61,6 +67,11 @@ export default function ReportPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-800">รายงานผลการทดสอบ</h1>
           <p className="text-sm text-gray-500 mt-1">{run.projectName}</p>
+          <div className="mt-2">
+            <span className={`text-xs px-2 py-1 rounded-full font-medium ${unsupportedCount > 0 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+              Unsupported Steps: {unsupportedCount}
+            </span>
+          </div>
         </div>
         <div className="flex gap-3">
           <button onClick={() => navigate(-1)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
@@ -113,9 +124,96 @@ export default function ReportPage() {
           <div className="text-sm text-gray-500 space-y-1">
             <p>เริ่มรัน: {run.startedAt ? new Date((run.startedAt as any).seconds * 1000).toLocaleString('th-TH') : '-'}</p>
             <p>เสร็จสิ้น: {run.completedAt ? new Date((run.completedAt as any).seconds * 1000).toLocaleString('th-TH') : '-'}</p>
+            <p>Engine Requested: <span className="font-semibold text-gray-700">{run.engineRequested ?? '-'}</span></p>
+            <p>Engine Used: <span className="font-semibold text-gray-700">{run.engineUsed ?? '-'}</span></p>
+            {run.fallbackReason && <p className="text-amber-600">Fallback: {run.fallbackReason}</p>}
           </div>
         </div>
       </div>
+
+      {run.caseResults && run.caseResults.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+          <h2 className="text-base font-semibold text-gray-700 mb-3">ผลลัพธ์ราย Test Case</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 text-gray-500 text-left">
+                  <th className="px-4 py-2 font-medium">Test Case ID</th>
+                  <th className="px-4 py-2 font-medium">ไฟล์</th>
+                  <th className="px-4 py-2 font-medium">ผลลัพธ์</th>
+                  <th className="px-4 py-2 font-medium">เวลา</th>
+                  <th className="px-4 py-2 font-medium">Errors</th>
+                  <th className="px-4 py-2 font-medium">Unsupported</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {run.caseResults.map((item, index) => {
+                  const unsupportedPerCase = item.errors.filter((error) => error.includes('UNSUPPORTED_STEP')).length;
+                  return (
+                    <tr key={`${item.testCaseId}-${index}`}>
+                      <td className="px-4 py-2 text-gray-700">{item.testCaseId}</td>
+                      <td className="px-4 py-2 text-gray-500">{item.filePattern ?? '-'}</td>
+                      <td className="px-4 py-2">
+                        <span className={`text-xs px-2 py-1 rounded-full ${item.passed ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
+                          {item.passed ? 'ผ่าน' : 'ไม่ผ่าน'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">{(item.duration / 1000).toFixed(2)}s</td>
+                      <td className="px-4 py-2 text-gray-500">{item.errors.length}</td>
+                      <td className="px-4 py-2">
+                        <span className={`text-xs px-2 py-1 rounded-full ${unsupportedPerCase > 0 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                          {unsupportedPerCase}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {run.mcpTrace && run.mcpTrace.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+          <h2 className="text-base font-semibold text-gray-700 mb-3">MCP Trace</h2>
+          <div className="max-h-72 overflow-auto rounded-lg border border-gray-200">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 text-gray-500 text-left">
+                  <th className="px-4 py-2 font-medium">Time</th>
+                  <th className="px-4 py-2 font-medium">Step</th>
+                  <th className="px-4 py-2 font-medium">Status</th>
+                  <th className="px-4 py-2 font-medium">Message</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {run.mcpTrace.map((item, index) => {
+                  const row = item as {
+                    timestamp?: string;
+                    step?: string;
+                    status?: string;
+                    message?: string;
+                  };
+
+                  return (
+                    <tr key={`${row.timestamp ?? 't'}-${index}`}>
+                      <td className="px-4 py-2 text-gray-500">{row.timestamp ?? '-'}</td>
+                      <td className="px-4 py-2 text-gray-700">{row.step ?? '-'}</td>
+                      <td className="px-4 py-2">
+                        <span className={`text-xs px-2 py-1 rounded-full ${row.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
+                          {row.status ?? '-'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-gray-600">{row.message ?? '-'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Error Logs */}
       {run.logs && (

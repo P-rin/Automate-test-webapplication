@@ -29,6 +29,17 @@ export interface TestRun {
   logs: string;
   screenshotUrls: string[];
   errorDetails: string;
+  engineRequested?: 'playwright' | 'mcp';
+  engineUsed?: 'playwright' | 'mcp';
+  fallbackReason?: string;
+  mcpTrace?: Array<Record<string, unknown>>;
+  caseResults?: Array<{
+    testCaseId: string;
+    passed: boolean;
+    errors: string[];
+    duration: number;
+    filePattern?: string;
+  }>;
   startedAt: Date;
   completedAt?: Date;
 }

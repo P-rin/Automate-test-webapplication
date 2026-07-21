@@ -4,7 +4,7 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 import { generateTestsTwoPass } from "../services/copilotService.js";
 import { createGenerationJob, getGenerationJob, processGenerateJob } from "../services/generationJobService.js";
-import { startExecution } from "../services/executionService.js";
+import { getTestRun, startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
 import { readSpecFiles } from "../services/specReader.js";
 import { artifactToSavePayload, saveGeneratedTestCase, updateTestCaseScript } from "../services/testCaseService.js";
@@ -23,6 +23,11 @@ const saveSchema = z.object({
 
 const executeSchema = z.object({
   testCaseIds: z.array(z.string().min(1)).min(1),
+});
+
+const executeV2Schema = z.object({
+  testCaseIds: z.array(z.string().min(1)).min(1),
+  engine: z.enum(["playwright", "mcp"]).optional(),
 });
 
 const updateScriptSchema = z.object({
@@ -127,6 +132,29 @@ apiRouter.get("/generation-jobs/:jobId", async (req, res) => {
   }
 });
 
+apiRouter.get("/v2/generation-jobs/:jobId", async (req, res) => {
+  try {
+    const job = await getGenerationJob(req.params.jobId);
+    return res.json({
+      id: job.id,
+      status: job.status,
+      percentage: job.percentage,
+      message: job.message,
+      errorMessage: job.errorMessage,
+      generatedTestCaseIds: job.generatedTestCaseIds,
+      plans: job.plans,
+      generatedTests: job.generatedTests,
+      source: job.source,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      createdAt: job.createdAt,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(404).json({ error: message });
+  }
+});
+
 apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
   try {
     const targetUrl = String(req.body.url ?? "");
@@ -166,6 +194,57 @@ apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
   }
 });
 
+apiRouter.post("/v2/generate-job", upload.array("files"), async (req, res) => {
+  try {
+    const targetUrl = String(req.body.url ?? "");
+    const projectName = String(req.body.projectName ?? targetUrl);
+
+    if (!isValidTargetUrl(targetUrl)) {
+      return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
+    }
+
+    const files = (req.files ?? []) as Express.Multer.File[];
+    const { combinedText, fileNames } = readSpecFiles(files);
+
+    const jobId = await createGenerationJob({
+      projectName,
+      targetUrl,
+      specification: combinedText,
+    });
+
+    void processGenerateJob(jobId, {
+      projectName,
+      targetUrl,
+      specification: combinedText,
+    }, {
+      provider: env.llmProvider,
+      apiToken: env.copilotApiToken,
+      copilotApiUrl: env.copilotApiUrl,
+      githubModelsApiUrl: env.githubModelsApiUrl,
+      copilotModel: env.copilotModel,
+      githubModelsModel: env.githubModelsModel,
+      maxPromptChars: env.llmMaxPromptChars,
+    });
+
+    return res.status(202).json({
+      jobId,
+      status: "accepted",
+      source: {
+        projectName,
+        targetUrl,
+        files: fileNames,
+      },
+      watch: {
+        collection: "generationJobs",
+        docId: jobId,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(500).json({ error: message });
+  }
+});
+
 apiRouter.post("/save-test", async (req, res) => {
   try {
     const payload = saveSchema.parse(req.body);
@@ -191,6 +270,57 @@ apiRouter.post("/execute", async (req, res) => {
     }
     const message = error instanceof Error ? error.message : "Unknown error";
     return res.status(500).json({ error: message });
+  }
+});
+
+apiRouter.post("/v2/execute", async (req, res) => {
+  try {
+    const payload = executeV2Schema.parse(req.body);
+    const result = await startExecution(payload.testCaseIds, {
+      requestedEngine: payload.engine,
+    });
+    return res.status(202).json({
+      ...result,
+      watch: {
+        collection: "testRuns",
+        docId: result.runId,
+      },
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(500).json({ error: message });
+  }
+});
+
+apiRouter.get("/v2/test-runs/:runId", async (req, res) => {
+  try {
+    const run = await getTestRun(req.params.runId);
+    return res.json({
+      id: run.id,
+      status: run.status,
+      projectId: run.projectId,
+      projectName: run.projectName,
+      testCaseIds: run.testCaseIds,
+      passCount: run.passCount,
+      failCount: run.failCount,
+      totalDuration: run.totalDuration,
+      logs: run.logs,
+      screenshotUrls: run.screenshotUrls,
+      errorDetails: run.errorDetails,
+      caseResults: run.caseResults,
+      engineRequested: run.engineRequested,
+      engineUsed: run.engineUsed,
+      fallbackReason: run.fallbackReason,
+      mcpTrace: run.mcpTrace,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(404).json({ error: message });
   }
 });
 
