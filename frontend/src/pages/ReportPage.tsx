@@ -32,7 +32,7 @@ export default function ReportPage() {
       const res = await fetch(`${BACKEND_URL}/api/v2/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testCaseIds: run.testCaseIds, engine: run.engineRequested ?? 'mcp' }),
+        body: JSON.stringify({ testCaseIds: run.testCaseIds, engine: 'playwright' }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json() as { runId?: string; engineUsed?: string; fallbackReason?: string };
@@ -55,6 +55,7 @@ export default function ReportPage() {
   ];
   const COLORS = ['#22c55e', '#ef4444'];
   const duration = run.totalDuration ? `${(run.totalDuration / 1000).toFixed(1)} วินาที` : '-';
+  const usesMcp = run.engineUsed === 'mcp';
   const unsupportedCount = (run.caseResults ?? []).reduce((total, item) => {
     const count = item.errors.filter((error) => error.includes('UNSUPPORTED_STEP')).length;
     return total + count;
@@ -68,9 +69,15 @@ export default function ReportPage() {
           <h1 className="text-2xl font-bold text-gray-800">รายงานผลการทดสอบ</h1>
           <p className="text-sm text-gray-500 mt-1">{run.projectName}</p>
           <div className="mt-2">
+            {usesMcp ? (
             <span className={`text-xs px-2 py-1 rounded-full font-medium ${unsupportedCount > 0 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
               Unsupported Steps: {unsupportedCount}
             </span>
+            ) : (
+              <span className="text-xs px-2 py-1 rounded-full font-medium bg-blue-100 text-blue-700">
+                Runtime: Playwright
+              </span>
+            )}
           </div>
         </div>
         <div className="flex gap-3">
@@ -143,7 +150,7 @@ export default function ReportPage() {
                   <th className="px-4 py-2 font-medium">ผลลัพธ์</th>
                   <th className="px-4 py-2 font-medium">เวลา</th>
                   <th className="px-4 py-2 font-medium">Errors</th>
-                  <th className="px-4 py-2 font-medium">Unsupported</th>
+                  {usesMcp && <th className="px-4 py-2 font-medium">Unsupported</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -160,11 +167,13 @@ export default function ReportPage() {
                       </td>
                       <td className="px-4 py-2 text-gray-500">{(item.duration / 1000).toFixed(2)}s</td>
                       <td className="px-4 py-2 text-gray-500">{item.errors.length}</td>
-                      <td className="px-4 py-2">
-                        <span className={`text-xs px-2 py-1 rounded-full ${unsupportedPerCase > 0 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
-                          {unsupportedPerCase}
-                        </span>
-                      </td>
+                      {usesMcp && (
+                        <td className="px-4 py-2">
+                          <span className={`text-xs px-2 py-1 rounded-full ${unsupportedPerCase > 0 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                            {unsupportedPerCase}
+                          </span>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -174,7 +183,7 @@ export default function ReportPage() {
         </div>
       )}
 
-      {run.mcpTrace && run.mcpTrace.length > 0 && (
+      {usesMcp && run.mcpTrace && run.mcpTrace.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
           <h2 className="text-base font-semibold text-gray-700 mb-3">MCP Trace</h2>
           <div className="max-h-72 overflow-auto rounded-lg border border-gray-200">

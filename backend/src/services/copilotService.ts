@@ -24,6 +24,56 @@ interface GeneratorResponse {
   script?: string;
 }
 
+const hasRealNewline = (value: string): boolean => /\r?\n/.test(value);
+
+const countMatches = (value: string, pattern: RegExp): number => value.match(pattern)?.length ?? 0;
+
+export const normalizeGeneratedScript = (script: string): string => {
+  if (typeof script !== "string" || !script.trim()) return script;
+
+  const trimmed = script.trim();
+  const literalNewlineCount = countMatches(trimmed, /\\n/g);
+  const looksDoubleEscaped = !hasRealNewline(trimmed)
+    && literalNewlineCount >= 2
+    && /@playwright\/test/.test(trimmed)
+    && /(?:^|\\n)(?:test|it)(?:\(|\.)/.test(trimmed);
+
+  if (!looksDoubleEscaped) {
+    return script;
+  }
+
+  const normalized = trimmed
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'")
+    .replace(/\\\\/g, "\\");
+
+  const normalizationLooksValid = hasRealNewline(normalized)
+    && /import\s+\{(?=[^}]*\btest\b)(?=[^}]*\bexpect\b)[^}]*\}\s+from\s+['"]@playwright\/test['"]/.test(normalized)
+    && /\b(?:test|it)(?:\s*\(|\s*\.)/.test(normalized);
+
+  return normalizationLooksValid ? normalized : script;
+};
+
+const summarizeScriptShape = (script: string): string => {
+  const normalized = script.trim();
+  const hasImport = /@playwright\/test/.test(normalized);
+  const hasTestBlock = /\b(?:test|it)(?:\s*\(|\s*\.)/.test(normalized);
+  return `len=${normalized.length},hasImport=${hasImport},hasTestBlock=${hasTestBlock}`;
+};
+
+const buildScriptPreview = (script: string, maxChars = 200): string => {
+  const normalized = script
+    .replace(/\r\n/g, "\n")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars)}...`;
+};
+
 export interface LlmGenerationOptions {
   provider?: string;
   apiToken?: string;
@@ -558,20 +608,59 @@ export const generateSingleScript = async (
 
   const runPromptSafely = createRunContext(apiToken, options);
   const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
-  const generatorRaw = await runPromptSafely(buildGeneratorPrompt(payload, plannedCase, maxPromptChars));
-  const generated = toJsonObject<GeneratorResponse>(generatorRaw);
 
-  if (!generated.id || !generated.title || !generated.script) {
-    throw new Error(`Generator response missing required fields for plan ${plannedCase.id}`);
+  let scriptShape: string | undefined;
+  let scriptPreview: string | undefined;
+  let normalizationApplied = false;
+
+  try {
+    const generatorRaw = await runPromptSafely(buildGeneratorPrompt(payload, plannedCase, maxPromptChars));
+    const generated = toJsonObject<GeneratorResponse>(generatorRaw);
+
+    if (!generated.id || !generated.title || !generated.script) {
+      throw new Error("Generator response missing required fields");
+    }
+
+    const executableScript = normalizeGeneratedScript(generated.script);
+    normalizationApplied = executableScript !== generated.script;
+
+    scriptShape = summarizeScriptShape(executableScript);
+    scriptPreview = buildScriptPreview(executableScript);
+
+    validateGeneratedScript(executableScript);
+
+    return {
+      id: generated.id,
+      title: generated.title,
+      script: executableScript,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const debugMeta = {
+      planId: plannedCase.id,
+      planTitle: plannedCase.title,
+      planType: plannedCase.type,
+      expectedSteps: plannedCase.testSteps.length,
+      normalizationApplied,
+    };
+
+    if (error instanceof Error && error.message.includes("Generated script")) {
+      console.warn("[generateSingleScript] Validation failed", {
+        ...debugMeta,
+        reason: message,
+        scriptPreview,
+      });
+    } else {
+      console.warn("[generateSingleScript] Generation failed", {
+        ...debugMeta,
+        reason: message,
+        scriptPreview,
+      });
+    }
+
+    const detailSuffix = scriptShape ? ` [${scriptShape}]` : "";
+    throw new Error(`Plan ${plannedCase.id} (${plannedCase.title}) failed: ${message}${detailSuffix}`);
   }
-
-  validateGeneratedScript(generated.script);
-
-  return {
-    id: generated.id,
-    title: generated.title,
-    script: generated.script,
-  };
 };
 
 export const generateTestsTwoPass = async (

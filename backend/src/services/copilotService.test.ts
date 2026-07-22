@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseJsonArrayResponse, validateGeneratedScript } from "./copilotService.js";
+import { normalizeGeneratedScript, parseJsonArrayResponse, validateGeneratedScript } from "./copilotService.js";
 
 test("parseJsonArrayResponse accepts a raw JSON array", () => {
   const result = parseJsonArrayResponse(`[{"id":"TC-001","title":"Test"}]`);
@@ -79,4 +79,28 @@ test("validateGeneratedScript rejects script with unbalanced parentheses", () =>
     `});\n`;
 
   assert.throws(() => validateGeneratedScript(invalidScript), /unbalanced brackets or parentheses/i);
+});
+
+test("normalizeGeneratedScript decodes guarded double-escaped playwright script", () => {
+  const escapedScript = "import { test, expect } from '@playwright/test';\\n\\n" +
+    "test('example', async ({ page }) => {\\n" +
+    "  await page.goto('https://example.com');\\n" +
+    "  await expect(page).toHaveTitle(/.+/);\\n" +
+    "});\\n";
+
+  const normalized = normalizeGeneratedScript(escapedScript);
+
+  assert.notEqual(normalized, escapedScript);
+  assert.match(normalized, /\r?\n/);
+  assert.doesNotThrow(() => validateGeneratedScript(normalized));
+});
+
+test("normalizeGeneratedScript leaves normal playwright script unchanged", () => {
+  const normalScript = `import { test, expect } from '@playwright/test';\n\n` +
+    `test('example', async ({ page }) => {\n` +
+    `  await page.goto('https://example.com');\n` +
+    `  await expect(page).toHaveTitle(/.+/);\n` +
+    `});\n`;
+
+  assert.equal(normalizeGeneratedScript(normalScript), normalScript);
 });

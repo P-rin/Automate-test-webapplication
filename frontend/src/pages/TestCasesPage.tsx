@@ -51,7 +51,7 @@ export default function TestCasesPage() {
       const res = await fetch(`${BACKEND_URL}/api/v2/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testCaseIds: selectedIds, engine: 'mcp' }),
+        body: JSON.stringify({ testCaseIds: selectedIds, engine: 'playwright' }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json() as {

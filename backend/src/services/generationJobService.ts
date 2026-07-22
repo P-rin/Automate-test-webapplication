@@ -114,6 +114,7 @@ export const processGenerateJob = async (
     }
 
     const generatedTests: GeneratedTestCase[] = [];
+    const failedCases: string[] = [];
 
     for (let index = 0; index < plans.length; index += 1) {
       const plan = plans[index];
@@ -123,37 +124,63 @@ export const processGenerateJob = async (
         message: `Generating ${currentCase}/${plans.length}: ${plan.title}`,
       });
 
-      const generated = await generateSingleScript(
-        {
+      try {
+        const generated = await generateSingleScript(
+          {
+            projectName: payload.projectName,
+            targetUrl: payload.targetUrl,
+            specification: payload.specification,
+            accessibilitySnapshot: snapshot,
+          },
+          plan,
+          options,
+        );
+
+        generatedTests.push(generated);
+
+        const savedId = await saveGeneratedTestCase({
           projectName: payload.projectName,
-          targetUrl: payload.targetUrl,
-          specification: payload.specification,
-          accessibilitySnapshot: snapshot,
-        },
-        plan,
-        options,
-      );
-
-      generatedTests.push(generated);
-
-      const savedId = await saveGeneratedTestCase({
-        projectName: payload.projectName,
-        url: payload.targetUrl,
-        title: generated.title,
-        type: "UI",
-        criteria: [],
-        script: generated.script,
-      });
-      await updateGenerationJob(jobId, {
-        generatedTestCaseIds: [savedId],
-        generatedTests,
-      });
+          url: payload.targetUrl,
+          title: generated.title,
+          type: "UI",
+          criteria: [],
+          script: generated.script,
+        });
+        await updateGenerationJob(jobId, {
+          generatedTestCaseIds: [savedId],
+          generatedTests,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failedCases.push(`${plan.id} (${plan.title}): ${message}`);
+        await updateGenerationJob(jobId, {
+          message: `Skipped ${currentCase}/${plans.length}: ${plan.title}`,
+          errorMessage: failedCases.join("\n"),
+          generatedTests,
+        });
+      }
     }
+
+    if (generatedTests.length === 0) {
+      await updateGenerationJob(jobId, {
+        status: "failed",
+        percentage: 100,
+        message: "Generation failed: no test cases were created",
+        errorMessage: failedCases.join("\n") || "No test cases were created",
+        completedAt: true,
+      });
+      return;
+    }
+
+    const completionMessage = failedCases.length > 0
+      ? `Generation completed with ${generatedTests.length} success(es) and ${failedCases.length} failure(s)`
+      : "Generation completed";
 
     await updateGenerationJob(jobId, {
       status: "completed",
       percentage: 100,
-      message: "Generation completed",
+      message: completionMessage,
+      errorMessage: failedCases.join("\n"),
       completedAt: true,
     });
   } catch (error) {

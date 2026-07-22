@@ -261,10 +261,13 @@ const resolveExecutionEngine = (requested?: ExecutionEngine): {
   fallbackReason: string;
 } => {
   const engineRequested = requested ?? asExecutionEngine(env.executionEngine);
+  const engineUsed: ExecutionEngine = "playwright";
   return {
     engineRequested,
-    engineUsed: engineRequested,
-    fallbackReason: "",
+    engineUsed,
+    fallbackReason: engineRequested === "mcp"
+      ? "Execution now uses Playwright runtime. MCP remains enabled for generation only."
+      : "",
   };
 };
 
