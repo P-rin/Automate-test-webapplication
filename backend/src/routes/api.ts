@@ -2,6 +2,14 @@ import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { env } from "../config/env.js";
+import {
+  createGithubSession,
+  exchangeGithubCodeForToken,
+  fetchGithubUser,
+  getGithubSession,
+  revokeGithubSession,
+  verifyCopilotSubscription,
+} from "../services/githubAuthService.js";
 import { generateTestsTwoPass } from "../services/copilotService.js";
 import { createGenerationJob, getGenerationJob, processGenerateJob } from "../services/generationJobService.js";
 import { getTestRun, startExecution } from "../services/executionService.js";
@@ -35,7 +43,25 @@ const updateScriptSchema = z.object({
   script: z.string().min(1),
 });
 
+const githubExchangeSchema = z.object({
+  code: z.string().min(1),
+  redirectUri: z.string().url().optional(),
+});
+
 export const apiRouter = Router();
+
+const getBearerToken = (authorizationHeader: string | undefined): string => {
+  if (!authorizationHeader) return "";
+  const [scheme, token] = authorizationHeader.split(" ");
+  if (!scheme || !token || scheme.toLowerCase() !== "bearer") return "";
+  return token.trim();
+};
+
+const resolveGithubSession = (authorizationHeader: string | undefined) => {
+  const token = getBearerToken(authorizationHeader);
+  if (!token) return null;
+  return getGithubSession(token);
+};
 
 const toClientError = (error: unknown): { status: number; message: string } => {
   const message = error instanceof Error ? error.message : "Unknown error";
@@ -63,10 +89,71 @@ apiRouter.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
+apiRouter.post("/auth/github", async (req, res) => {
+  try {
+    const payload = githubExchangeSchema.parse(req.body);
+    const tokenExchange = await exchangeGithubCodeForToken(payload.code, payload.redirectUri);
+    const user = await fetchGithubUser(tokenExchange.accessToken);
+    const copilot = await verifyCopilotSubscription(tokenExchange.accessToken);
+
+    if (!copilot.active) {
+      return res.status(403).json({
+        error: "Copilot subscription is not active",
+        copilot,
+      });
+    }
+
+    const session = createGithubSession(tokenExchange.accessToken, user, copilot);
+    return res.status(201).json({
+      sessionToken: session.sessionToken,
+      user: session.user,
+      copilot: session.copilot,
+      expiresAt: session.expiresAt,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(400).json({ error: message });
+  }
+});
+
+apiRouter.get("/auth/session", (req, res) => {
+  const session = resolveGithubSession(req.headers.authorization);
+  if (!session) {
+    return res.status(401).json({ error: "Invalid or expired session" });
+  }
+
+  return res.json({
+    user: session.user,
+    copilot: session.copilot,
+    expiresAt: session.expiresAt,
+  });
+});
+
+apiRouter.post("/auth/logout", (req, res) => {
+  const token = getBearerToken(req.headers.authorization);
+  if (token) {
+    revokeGithubSession(token);
+  }
+  return res.status(204).send();
+});
+
 apiRouter.post("/generate", upload.array("files"), async (req, res) => {
   try {
+    const session = resolveGithubSession(req.headers.authorization);
+    if (!session) {
+      return res.status(401).json({ error: "GitHub session is required" });
+    }
+    if (!session.copilot.active) {
+      return res.status(403).json({ error: session.copilot.reason || "Copilot license is not active" });
+    }
+
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
+    const inlineRequirements = String(req.body.requirements ?? "").trim();
 
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
@@ -74,18 +161,19 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
 
     const files = (req.files ?? []) as Express.Multer.File[];
     const { combinedText, fileNames } = readSpecFiles(files);
-    const snapshot = await fetchAccessibilitySnapshot(targetUrl, combinedText);
+    const effectiveSpecification = [inlineRequirements, combinedText].filter(Boolean).join("\n\n");
+    const snapshot = await fetchAccessibilitySnapshot(targetUrl, effectiveSpecification);
 
     const generatedTests = await generateTestsTwoPass(
       {
         projectName,
         targetUrl,
-        specification: combinedText,
+        specification: effectiveSpecification,
         accessibilitySnapshot: snapshot,
       },
       {
         provider: env.llmProvider,
-        apiToken: env.copilotApiToken,
+        apiToken: session.githubAccessToken,
         copilotApiUrl: env.copilotApiUrl,
         githubModelsApiUrl: env.githubModelsApiUrl,
         copilotModel: env.copilotModel,
@@ -157,8 +245,17 @@ apiRouter.get("/v2/generation-jobs/:jobId", async (req, res) => {
 
 apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
   try {
+    const session = resolveGithubSession(req.headers.authorization);
+    if (!session) {
+      return res.status(401).json({ error: "GitHub session is required" });
+    }
+    if (!session.copilot.active) {
+      return res.status(403).json({ error: session.copilot.reason || "Copilot license is not active" });
+    }
+
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
+    const inlineRequirements = String(req.body.requirements ?? "").trim();
 
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
@@ -166,20 +263,21 @@ apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
 
     const files = (req.files ?? []) as Express.Multer.File[];
     const { combinedText } = readSpecFiles(files);
+    const effectiveSpecification = [inlineRequirements, combinedText].filter(Boolean).join("\n\n");
 
     const jobId = await createGenerationJob({
       projectName,
       targetUrl,
-      specification: combinedText,
+      specification: effectiveSpecification,
     });
 
     void processGenerateJob(jobId, {
       projectName,
       targetUrl,
-      specification: combinedText,
+      specification: effectiveSpecification,
     }, {
       provider: env.llmProvider,
-      apiToken: env.copilotApiToken,
+      apiToken: session.githubAccessToken,
       copilotApiUrl: env.copilotApiUrl,
       githubModelsApiUrl: env.githubModelsApiUrl,
       copilotModel: env.copilotModel,
@@ -196,8 +294,17 @@ apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
 
 apiRouter.post("/v2/generate-job", upload.array("files"), async (req, res) => {
   try {
+    const session = resolveGithubSession(req.headers.authorization);
+    if (!session) {
+      return res.status(401).json({ error: "GitHub session is required" });
+    }
+    if (!session.copilot.active) {
+      return res.status(403).json({ error: session.copilot.reason || "Copilot license is not active" });
+    }
+
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
+    const inlineRequirements = String(req.body.requirements ?? "").trim();
 
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
@@ -205,20 +312,82 @@ apiRouter.post("/v2/generate-job", upload.array("files"), async (req, res) => {
 
     const files = (req.files ?? []) as Express.Multer.File[];
     const { combinedText, fileNames } = readSpecFiles(files);
+    const effectiveSpecification = [inlineRequirements, combinedText].filter(Boolean).join("\n\n");
 
     const jobId = await createGenerationJob({
       projectName,
       targetUrl,
-      specification: combinedText,
+      specification: effectiveSpecification,
     });
 
     void processGenerateJob(jobId, {
       projectName,
       targetUrl,
-      specification: combinedText,
+      specification: effectiveSpecification,
     }, {
       provider: env.llmProvider,
-      apiToken: env.copilotApiToken,
+      apiToken: session.githubAccessToken,
+      copilotApiUrl: env.copilotApiUrl,
+      githubModelsApiUrl: env.githubModelsApiUrl,
+      copilotModel: env.copilotModel,
+      githubModelsModel: env.githubModelsModel,
+      maxPromptChars: env.llmMaxPromptChars,
+    });
+
+    return res.status(202).json({
+      jobId,
+      status: "accepted",
+      source: {
+        projectName,
+        targetUrl,
+        files: fileNames,
+      },
+      watch: {
+        collection: "generationJobs",
+        docId: jobId,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(500).json({ error: message });
+  }
+});
+
+apiRouter.post("/generate-test", upload.array("files"), async (req, res) => {
+  try {
+    const session = resolveGithubSession(req.headers.authorization);
+    if (!session) {
+      return res.status(401).json({ error: "GitHub session is required" });
+    }
+    if (!session.copilot.active) {
+      return res.status(403).json({ error: session.copilot.reason || "Copilot license is not active" });
+    }
+
+    const targetUrl = String(req.body.url ?? "");
+    const projectName = String(req.body.projectName ?? targetUrl);
+    const inlineRequirements = String(req.body.requirements ?? "").trim();
+
+    if (!isValidTargetUrl(targetUrl)) {
+      return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
+    }
+
+    const files = (req.files ?? []) as Express.Multer.File[];
+    const { combinedText, fileNames } = readSpecFiles(files);
+    const effectiveSpecification = [inlineRequirements, combinedText].filter(Boolean).join("\n\n");
+
+    const jobId = await createGenerationJob({
+      projectName,
+      targetUrl,
+      specification: effectiveSpecification,
+    });
+
+    void processGenerateJob(jobId, {
+      projectName,
+      targetUrl,
+      specification: effectiveSpecification,
+    }, {
+      provider: env.llmProvider,
+      apiToken: session.githubAccessToken,
       copilotApiUrl: env.copilotApiUrl,
       githubModelsApiUrl: env.githubModelsApiUrl,
       copilotModel: env.copilotModel,

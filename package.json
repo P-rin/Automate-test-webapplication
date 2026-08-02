@@ -6,7 +6,9 @@
     "dev": "concurrently -n FE,BE -c green,blue \"npm run dev --prefix frontend\" \"npm run dev --prefix backend\"",
     "dev:frontend": "npm run dev --prefix frontend",
     "dev:backend": "npm run dev --prefix backend",
-    "install:all": "npm install --prefix frontend ; npm install --prefix backend"
+    "install:all": "npm install --prefix frontend ; npm install --prefix backend",
+    "tunnel:ngrok": "ngrok http 4000",
+    "tunnel:lt": "npx localtunnel --port 4000 --local-host localhost"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

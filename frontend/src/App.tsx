@@ -2,8 +2,10 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
+import { useGithubSession } from './context/GithubSessionContext';
 import { firebaseInitError } from './lib/firebase';
 import AuthPage from './pages/AuthPage';
+import AuthCallbackPage from './pages/AuthCallbackPage';
 import DashboardPage from './pages/DashboardPage';
 import SetupPage from './pages/SetupPage';
 import TestCasesPage from './pages/TestCasesPage';
@@ -33,6 +35,8 @@ VITE_FIREBASE_APP_ID=`}
 
 function AppRoutes() {
   const { user, loading } = useAuth();
+  const { session } = useGithubSession();
+  const isAuthenticated = Boolean(user || session);
 
   if (firebaseInitError) {
     return <ConfigErrorPage message={firebaseInitError} />;
@@ -50,8 +54,10 @@ function AppRoutes() {
     <Routes>
       <Route
         path="/auth"
-        element={user ? <Navigate to="/" replace /> : <AuthPage />}
+        element={isAuthenticated ? <Navigate to="/" replace /> : <AuthPage />}
       />
+
+      <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
       <Route
         path="/"
@@ -69,7 +75,7 @@ function AppRoutes() {
 
       <Route
         path="*"
-        element={<Navigate to={user ? '/' : '/auth'} replace />}
+        element={<Navigate to={isAuthenticated ? '/' : '/auth'} replace />}
       />
     </Routes>
   );

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { useGithubSession } from '../context/GithubSessionContext';
 
 interface StepState {
   connecting: 'idle' | 'loading' | 'done' | 'error';
@@ -28,7 +29,9 @@ interface GenerationJobDoc {
 
 export default function SetupPage() {
   const navigate = useNavigate();
+  const { session } = useGithubSession();
   const [url, setUrl] = useState('https://example.com');
+  const [requirementsText, setRequirementsText] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -54,7 +57,10 @@ export default function SetupPage() {
   }) => {
     const res = await fetch(`${BACKEND_URL}/api/save-generated`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(session ? { Authorization: `Bearer ${session.sessionToken}` } : {}),
+      },
       body: JSON.stringify({
         projectName: projectName || url,
         url,
@@ -92,6 +98,11 @@ export default function SetupPage() {
   };
 
   const handleGenerate = async () => {
+    if (!session) {
+      alert('กรุณาเข้าสู่ระบบด้วย GitHub OAuth ก่อนสร้างชุดทดสอบ');
+      return;
+    }
+
     if (!url) {
       alert('กรุณากรอก URL ของระบบที่ต้องการทดสอบ');
       return;
@@ -111,6 +122,7 @@ export default function SetupPage() {
       const formData = new FormData();
       formData.append('url', url);
       formData.append('projectName', projectName || url);
+      formData.append('requirements', requirementsText.trim());
       files.forEach(f => formData.append('files', f));
 
       setStep('connecting', 'done');
@@ -119,6 +131,9 @@ export default function SetupPage() {
 
       const res = await fetch(`${BACKEND_URL}/api/v2/generate-job`, {
         method: 'POST',
+        headers: {
+          ...(session ? { Authorization: `Bearer ${session.sessionToken}` } : {}),
+        },
         body: formData,
       });
 
@@ -197,6 +212,31 @@ export default function SetupPage() {
     }
   };
 
+  const handleCopyCode = async () => {
+    if (!generatedCode) return;
+
+    try {
+      await navigator.clipboard.writeText(generatedCode);
+      alert('คัดลอกโค้ดเรียบร้อยแล้ว');
+    } catch (err) {
+      console.error(err);
+      alert('ไม่สามารถคัดลอกโค้ดได้');
+    }
+  };
+
+  const handleDownloadCode = () => {
+    if (!generatedCode) return;
+
+    const fileName = `${(projectName || 'generated-test').replace(/\s+/g, '-').toLowerCase()}.spec.ts`;
+    const blob = new Blob([generatedCode], { type: 'text/plain;charset=utf-8' });
+    const urlObject = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = urlObject;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(urlObject);
+  };
+
   const stepItems: { key: keyof StepState; label: string }[] = [
     { key: 'connecting', label: 'Connecting to Target Website' },
         { key: 'reading', label: 'Reading Context Specification File(s) (Optional)' },
@@ -235,6 +275,17 @@ export default function SetupPage() {
           value={url}
           onChange={e => setUrl(e.target.value)}
           placeholder="https://example.com"
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">
+        <label className="block text-sm font-medium text-gray-700">Context / Requirements</label>
+        <textarea
+          value={requirementsText}
+          onChange={e => setRequirementsText(e.target.value)}
+          rows={6}
+          placeholder="ระบุเงื่อนไขทดสอบ, flow สำคัญ, ข้อมูลทดสอบ หรือข้อกำหนดที่ต้องการให้ระบบสร้างเคส"
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
@@ -329,6 +380,20 @@ export default function SetupPage() {
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-700">โค้ด Playwright Script ที่สร้างได้</h3>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCopyCode}
+                className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100"
+              >
+                Copy
+              </button>
+              <button
+                onClick={handleDownloadCode}
+                className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100"
+              >
+                Download
+              </button>
+            </div>
           </div>
           {saveStatus && (
             <p className={`text-xs ${saveStatus.includes('ไม่สำเร็จ') ? 'text-amber-600' : 'text-green-600'}`}>

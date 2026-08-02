@@ -3,11 +3,14 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { AuthProvider } from './context/AuthContext.tsx'
+import { GithubSessionProvider } from './context/GithubSessionContext.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AuthProvider>
-      <App />
-    </AuthProvider>
+    <GithubSessionProvider>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </GithubSessionProvider>
   </StrictMode>,
 )

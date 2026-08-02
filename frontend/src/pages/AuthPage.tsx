@@ -10,6 +10,10 @@ import { auth, firebaseInitError } from '../lib/firebase';
 
 type AuthMode = 'login' | 'register';
 
+const githubClientId = import.meta.env.VITE_GITHUB_CLIENT_ID || '';
+const githubScope = import.meta.env.VITE_GITHUB_SCOPE || 'read:user user:email copilot';
+const callbackUri = `${window.location.origin}/auth/callback`;
+
 export default function AuthPage() {
   const [mode, setMode] = useState<AuthMode>('login');
   const [name, setName] = useState('');
@@ -24,6 +28,24 @@ export default function AuthPage() {
   const redirectTo = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/';
 
   const isRegister = mode === 'register';
+
+  const handleGithubSignIn = () => {
+    if (!githubClientId) {
+      setError('ยังไม่ได้ตั้งค่า VITE_GITHUB_CLIENT_ID สำหรับ GitHub OAuth');
+      return;
+    }
+
+    const state = crypto.randomUUID();
+    sessionStorage.setItem('github_oauth_state', state);
+
+    const authUrl = new URL('https://github.com/login/oauth/authorize');
+    authUrl.searchParams.set('client_id', githubClientId);
+    authUrl.searchParams.set('redirect_uri', callbackUri);
+    authUrl.searchParams.set('scope', githubScope);
+    authUrl.searchParams.set('state', state);
+
+    window.location.href = authUrl.toString();
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -69,6 +91,18 @@ export default function AuthPage() {
           </h1>
           <p className="mt-1 text-sm text-slate-500">ใช้ Firebase Authentication เพื่อเข้าใช้งานระบบ</p>
         </div>
+
+        <button
+          type="button"
+          onClick={handleGithubSignIn}
+          className="w-full mb-4 border border-slate-300 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Sign in with GitHub (OAuth)
+        </button>
+
+        <p className="text-[11px] text-slate-500 mb-5">
+          GitHub OAuth ใช้สำหรับ flow ที่ต้องตรวจสอบสิทธิ์ Copilot ก่อนสร้าง test case
+        </p>
 
         <div className="grid grid-cols-2 bg-slate-100 rounded-xl p-1 mb-6">
           <button

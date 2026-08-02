@@ -4,7 +4,11 @@ Node.js + Express + TypeScript backend for generating Playwright test scripts, s
 
 ## Features
 
+- `POST /api/auth/github`: exchange GitHub OAuth `code`, verify active Copilot subscription, and create backend session token.
+- `GET /api/auth/session`: validate backend session token.
+- `POST /api/auth/logout`: revoke backend session token.
 - `POST /api/generate`: ingest localhost URL + `.md/.txt` files, explore the app via Playwright MCP (landing page, login attempt from spec credentials, post-login navigation snapshots), then generate Playwright script via Copilot API SDK client.
+- `POST /api/generate-test`: orchestration endpoint (MCP snapshot + Copilot code generation) for FE clients.
 - `POST /api/save-test`: persist generated test case to Firestore.
 - `POST /api/execute`: run selected test cases with Playwright (`npx playwright test`) and update Firestore in real-time.
 - `GET /health`: liveness check.
@@ -26,6 +30,12 @@ cp .env.example .env
 
 Fill Firebase Admin credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`) and Copilot API token (`COPILOT_API_TOKEN`).
 
+Add GitHub OAuth config for user sign-in:
+
+- `GITHUB_OAUTH_CLIENT_ID`
+- `GITHUB_OAUTH_CLIENT_SECRET`
+- `GITHUB_OAUTH_REDIRECT_URI` (ex: `http://localhost:5173/auth/callback`)
+
 Important provider rules:
 
 - `LLM_PROVIDER=auto` (default):
@@ -45,6 +55,8 @@ Environment keys:
 - `PLAYWRIGHT_EXPLORE_MAX_SNAPSHOTS` = max number of snapshots to collect during MCP exploration
 - `PLAYWRIGHT_EXPLORE_MAX_CANDIDATES` = max number of clickable candidates to explore after the base snapshot
 - `PLAYWRIGHT_EXPLORE_MAX_DEPTH` = max crawl depth for internal route exploration
+
+For localhost OAuth testing with HTTPS public URL, see [TUNNELING.md](./TUNNELING.md).
 
 3. Start dev server:
 

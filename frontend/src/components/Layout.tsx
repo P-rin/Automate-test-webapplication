@@ -1,7 +1,10 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { useAuth } from '../context/AuthContext';
+import { useGithubSession } from '../context/GithubSessionContext';
 import { auth } from '../lib/firebase';
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
 const navItems = [
   { to: '/', label: '🏠 แดชบอร์ด', exact: true },
@@ -11,8 +14,25 @@ const navItems = [
 
 export default function Layout() {
   const { user } = useAuth();
+  const { session, clearSession } = useGithubSession();
 
   const handleLogout = async () => {
+    if (session) {
+      try {
+        await fetch(`${BACKEND_URL}/api/auth/logout`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${session.sessionToken}`,
+          },
+        });
+      } catch (err) {
+        console.error(err);
+      } finally {
+        clearSession();
+      }
+      return;
+    }
+
     if (!auth) return;
 
     try {
@@ -43,8 +63,18 @@ export default function Layout() {
           ))}
 
           <div className="ml-auto flex items-center gap-3">
-            <span className="text-xs text-gray-500 max-w-44 truncate" title={user?.email || ''}>
-              {user?.displayName || user?.email}
+            {session?.user.avatarUrl ? (
+              <img
+                src={session.user.avatarUrl}
+                alt={session.user.login}
+                className="w-7 h-7 rounded-full border border-gray-200"
+              />
+            ) : null}
+            <span
+              className="text-xs text-gray-500 max-w-52 truncate"
+              title={session?.user.login || user?.email || ''}
+            >
+              {session ? `${session.user.name || session.user.login} (${session.user.login})` : (user?.displayName || user?.email)}
             </span>
             <button
               onClick={handleLogout}

@@ -5,6 +5,22 @@ import type { TestCase, Project } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
+const toMillis = (value: unknown): number => {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+
+  const asTimestamp = value as { seconds?: number; nanoseconds?: number; toDate?: () => Date };
+  if (typeof asTimestamp.toDate === 'function') {
+    return asTimestamp.toDate().getTime();
+  }
+  if (typeof asTimestamp.seconds === 'number') {
+    const nanos = typeof asTimestamp.nanoseconds === 'number' ? asTimestamp.nanoseconds : 0;
+    return asTimestamp.seconds * 1000 + Math.floor(nanos / 1_000_000);
+  }
+
+  return 0;
+};
+
 export default function TestCasesPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
@@ -19,16 +35,28 @@ export default function TestCasesPage() {
       const cases = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TestCase));
       setTestCases(cases);
 
-      // Derive unique projects
+      // Derive unique projects and keep each project's earliest case createdAt.
       const projMap = new Map<string, Project>();
       cases.forEach(tc => {
-        if (!projMap.has(tc.projectId)) {
-          projMap.set(tc.projectId, { id: tc.projectId, name: tc.projectName, url: '', createdAt: new Date() });
+        const caseCreatedAt = tc.createdAt ? new Date(toMillis(tc.createdAt as unknown)) : new Date(0);
+        const existing = projMap.get(tc.projectId);
+
+        if (!existing) {
+          projMap.set(tc.projectId, { id: tc.projectId, name: tc.projectName, url: '', createdAt: caseCreatedAt });
+          return;
+        }
+
+        if (caseCreatedAt.getTime() < existing.createdAt.getTime()) {
+          projMap.set(tc.projectId, { ...existing, createdAt: caseCreatedAt });
         }
       });
-      const projList = Array.from(projMap.values());
+      const projList = Array.from(projMap.values()).sort(
+        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+      );
+
       setProjects(projList);
-      if (!selectedProjectId && projList.length > 0) {
+
+      if (projList.length > 0 && (!selectedProjectId || !projList.some(p => p.id === selectedProjectId))) {
         setSelectedProjectId(projList[0].id);
       }
     });
