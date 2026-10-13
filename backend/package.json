@@ -11,7 +11,6 @@
     "test:run": "tsx run-tests.ts"
   },
   "dependencies": {
-    "@github/copilot-sdk": "^1.0.7",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@playwright/mcp": "^0.0.78",
     "@playwright/test": "^1.61.1",
@@ -20,7 +19,7 @@
     "express": "^4.19.2",
     "firebase-admin": "^12.5.0",
     "multer": "^1.4.5-lts.1",
-    "openai": "^4.104.0",
+    "ollama": "^0.6.4",
     "playwright": "^1.53.1",
     "uuid": "^11.0.3",
     "zod": "^3.23.8"

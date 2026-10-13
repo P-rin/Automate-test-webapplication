@@ -61,7 +61,7 @@ const buildDefaultMcpArgs = (): string[] => {
   return args;
 };
 
-const resolveMcpCommand = (): { command: string; args: string[] } => {
+export const resolvePlaywrightMcpLaunchConfig = (): { command: string; args: string[] } => {
   const command = env.playwrightMcpCommand?.trim() || defaultMcpCommand;
 
   if (isNpxCommand(command)) {
@@ -497,7 +497,7 @@ const exploreClickableRoutes = async (
 };
 
 export const fetchAccessibilitySnapshot = async (url: string, specification = ""): Promise<string> => {
-  const { command, args } = resolveMcpCommand();
+  const { command, args } = resolvePlaywrightMcpLaunchConfig();
   const transport = new StdioClientTransport({ command, args });
   const client = new Client({ name: "autonomous-verification-backend", version: "1.0.0" });
 

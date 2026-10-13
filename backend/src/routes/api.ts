@@ -10,7 +10,8 @@ import {
   revokeGithubSession,
   verifyCopilotSubscription,
 } from "../services/githubAuthService.js";
-import { generateTestsTwoPass } from "../services/copilotService.js";
+import { generateTestsTwoPass } from "../services/ollamaService.js";
+import { requireFirebaseAuth } from "../services/firebaseAuthService.js";
 import { createGenerationJob, getGenerationJob, processGenerateJob } from "../services/generationJobService.js";
 import { getTestRun, startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
@@ -141,16 +142,8 @@ apiRouter.post("/auth/logout", (req, res) => {
   return res.status(204).send();
 });
 
-apiRouter.post("/generate", upload.array("files"), async (req, res) => {
+apiRouter.post("/generate", requireFirebaseAuth, upload.array("files"), async (req, res) => {
   try {
-    const session = resolveGithubSession(req.headers.authorization);
-    if (!session) {
-      return res.status(401).json({ error: "GitHub session is required" });
-    }
-    if (!session.copilot.active) {
-      return res.status(403).json({ error: session.copilot.reason || "Copilot license is not active" });
-    }
-
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
     const inlineRequirements = String(req.body.requirements ?? "").trim();
@@ -172,25 +165,14 @@ apiRouter.post("/generate", upload.array("files"), async (req, res) => {
         accessibilitySnapshot: snapshot,
       },
       {
-        provider: env.llmProvider,
-        apiToken: session.githubAccessToken,
-        copilotApiUrl: env.copilotApiUrl,
-        githubModelsApiUrl: env.githubModelsApiUrl,
-        copilotModel: env.copilotModel,
-        githubModelsModel: env.githubModelsModel,
+        ollamaHost: env.ollamaBaseUrl,
+        ollamaModel: env.ollamaModel,
         maxPromptChars: env.llmMaxPromptChars,
       },
     );
 
-    const primary = generatedTests[0] ?? {
-      id: "TC-001",
-      title: `Smoke test - ${projectName}`,
-      script: `import { test, expect } from '@playwright/test';\n\n` +
-        `test('smoke: ${projectName}', async ({ page }) => {\n` +
-        `  await page.goto('${targetUrl}');\n` +
-        `  await expect(page).toHaveTitle(/.+/);\n` +
-        `});\n`,
-    };
+    const primary = generatedTests[0];
+    if (!primary) throw new Error("Ollama did not generate any test cases");
 
     return res.json({
       title: primary.title,
@@ -243,16 +225,8 @@ apiRouter.get("/v2/generation-jobs/:jobId", async (req, res) => {
   }
 });
 
-apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
+apiRouter.post("/generate-job", requireFirebaseAuth, upload.array("files"), async (req, res) => {
   try {
-    const session = resolveGithubSession(req.headers.authorization);
-    if (!session) {
-      return res.status(401).json({ error: "GitHub session is required" });
-    }
-    if (!session.copilot.active) {
-      return res.status(403).json({ error: session.copilot.reason || "Copilot license is not active" });
-    }
-
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
     const inlineRequirements = String(req.body.requirements ?? "").trim();
@@ -276,12 +250,8 @@ apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
       targetUrl,
       specification: effectiveSpecification,
     }, {
-      provider: env.llmProvider,
-      apiToken: session.githubAccessToken,
-      copilotApiUrl: env.copilotApiUrl,
-      githubModelsApiUrl: env.githubModelsApiUrl,
-      copilotModel: env.copilotModel,
-      githubModelsModel: env.githubModelsModel,
+      ollamaHost: env.ollamaBaseUrl,
+      ollamaModel: env.ollamaModel,
       maxPromptChars: env.llmMaxPromptChars,
     });
 
@@ -292,16 +262,8 @@ apiRouter.post("/generate-job", upload.array("files"), async (req, res) => {
   }
 });
 
-apiRouter.post("/v2/generate-job", upload.array("files"), async (req, res) => {
+apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), async (req, res) => {
   try {
-    const session = resolveGithubSession(req.headers.authorization);
-    if (!session) {
-      return res.status(401).json({ error: "GitHub session is required" });
-    }
-    if (!session.copilot.active) {
-      return res.status(403).json({ error: session.copilot.reason || "Copilot license is not active" });
-    }
-
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
     const inlineRequirements = String(req.body.requirements ?? "").trim();
@@ -325,12 +287,8 @@ apiRouter.post("/v2/generate-job", upload.array("files"), async (req, res) => {
       targetUrl,
       specification: effectiveSpecification,
     }, {
-      provider: env.llmProvider,
-      apiToken: session.githubAccessToken,
-      copilotApiUrl: env.copilotApiUrl,
-      githubModelsApiUrl: env.githubModelsApiUrl,
-      copilotModel: env.copilotModel,
-      githubModelsModel: env.githubModelsModel,
+      ollamaHost: env.ollamaBaseUrl,
+      ollamaModel: env.ollamaModel,
       maxPromptChars: env.llmMaxPromptChars,
     });
 
@@ -353,16 +311,8 @@ apiRouter.post("/v2/generate-job", upload.array("files"), async (req, res) => {
   }
 });
 
-apiRouter.post("/generate-test", upload.array("files"), async (req, res) => {
+apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), async (req, res) => {
   try {
-    const session = resolveGithubSession(req.headers.authorization);
-    if (!session) {
-      return res.status(401).json({ error: "GitHub session is required" });
-    }
-    if (!session.copilot.active) {
-      return res.status(403).json({ error: session.copilot.reason || "Copilot license is not active" });
-    }
-
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
     const inlineRequirements = String(req.body.requirements ?? "").trim();
@@ -386,12 +336,8 @@ apiRouter.post("/generate-test", upload.array("files"), async (req, res) => {
       targetUrl,
       specification: effectiveSpecification,
     }, {
-      provider: env.llmProvider,
-      apiToken: session.githubAccessToken,
-      copilotApiUrl: env.copilotApiUrl,
-      githubModelsApiUrl: env.githubModelsApiUrl,
-      copilotModel: env.copilotModel,
-      githubModelsModel: env.githubModelsModel,
+      ollamaHost: env.ollamaBaseUrl,
+      ollamaModel: env.ollamaModel,
       maxPromptChars: env.llmMaxPromptChars,
     });
 

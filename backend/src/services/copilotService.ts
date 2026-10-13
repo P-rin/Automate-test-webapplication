@@ -1,21 +1,15 @@
-import OpenAI from "openai";
-import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Ollama } from "ollama";
+import type { Message, Tool } from "ollama";
 import type { GeneratedArtifact, GeneratedTestCase, TestPlan } from "../types.js";
-
-type LlmProvider = "auto" | "copilot" | "github-models";
+import { resolvePlaywrightMcpLaunchConfig } from "./snapshotService.js";
 
 interface CopilotRequest {
   projectName: string;
   targetUrl: string;
   specification: string;
   accessibilitySnapshot: string;
-}
-
-interface CopilotResponse {
-  title?: string;
-  type?: "UI" | "API";
-  criteria?: string[];
-  script?: string;
 }
 
 interface GeneratorResponse {
@@ -75,14 +69,12 @@ const buildScriptPreview = (script: string, maxChars = 200): string => {
 };
 
 export interface LlmGenerationOptions {
-  provider?: string;
-  apiToken?: string;
-  copilotApiUrl?: string;
-  githubModelsApiUrl?: string;
-  copilotModel?: string;
-  githubModelsModel?: string;
+  ollamaHost?: string;
+  ollamaModel?: string;
   maxPromptChars?: number;
-  preferCopilotSdk?: boolean;
+  ollamaClient?: Pick<Ollama, "chat">;
+  mcpClient?: Pick<Client, "listTools" | "callTool">;
+  workingDirectory?: string;
 }
 
 const DEFAULT_LLM_MAX_PROMPT_CHARS = 14000;
@@ -102,7 +94,7 @@ export const parseJsonArrayResponse = <T>(value: string): T[] => {
     parsed = JSON.parse(candidate) as unknown;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Copilot planner response is not a valid JSON payload: ${message}`);
+    throw new Error(`Model planner response is not a valid JSON payload: ${message}`);
   }
 
   if (Array.isArray(parsed)) {
@@ -122,7 +114,7 @@ export const parseJsonArrayResponse = <T>(value: string): T[] => {
     }
   }
 
-  throw new Error("Copilot planner response is not a JSON array or object with an array property");
+  throw new Error("Model planner response is not a JSON array or object with an array property");
 };
 
 const cleanJsonText = (value: string): string => {
@@ -139,11 +131,11 @@ const toJsonObject = <T>(value: string): T => {
     parsed = JSON.parse(candidate) as unknown;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Copilot response is not a valid JSON object: ${message}`);
+    throw new Error(`Model response is not a valid JSON object: ${message}`);
   }
 
   if (typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) {
-    throw new Error("Copilot response is not a JSON object");
+    throw new Error("Model response is not a JSON object");
   }
   return parsed as T;
 };
@@ -328,6 +320,25 @@ const buildPlannerPrompt = (payload: CopilotRequest, maxPromptChars: number): st
   ].join("\n");
 };
 
+export const buildAgentGenerationPrompt = (payload: CopilotRequest, plannedCase: TestPlan): string => {
+  const trimmedSpecification = payload.specification.trim();
+  const task = [
+    "You are an autonomous QA agent using Playwright MCP.",
+    "Open the target site, inspect the page, and create a Playwright test that matches the requested behavior.",
+    "Use the MCP browser tools to navigate, inspect elements, and validate the flow before writing the final test.",
+    `Target URL: ${payload.targetUrl}`,
+    `Project: ${payload.projectName}`,
+    `Specification: ${trimmedSpecification || "No additional specification provided"}`,
+    `Accessibility snapshot: ${payload.accessibilitySnapshot || "No snapshot provided"}`,
+    `Planned case: ${plannedCase.title}`,
+    `Steps: ${plannedCase.testSteps.join(" | ")}`,
+    "Return a JSON object with fields id, title, and script.",
+    "The script must import test and expect from '@playwright/test' and contain at least one Playwright test block.",
+  ].join("\n");
+
+  return truncateText(task, 14000, "agent generation prompt");
+};
+
 const buildGeneratorPrompt = (payload: CopilotRequest, plannedCase: TestPlan, maxPromptChars: number): string => {
   // Allocate carefully: 50% for snapshot, 30% for plan, 20% for instructions
   const maxSnapshotLength = Math.floor(maxPromptChars * 0.5);
@@ -396,208 +407,126 @@ const fallbackGeneratedTestCase = (projectName: string, url: string): GeneratedT
     `});\n`,
 });
 
-const isUnsupportedTokenError = (error: unknown): boolean => {
-  const message = error instanceof Error ? error.message : String(error);
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("checking third-party user token") ||
-    lower.includes("personal access tokens are not supported") ||
-    lower.includes("third-party user token")
-  );
-};
+const ALLOWED_PLAYWRIGHT_TOOLS = new Set([
+  "browser_navigate",
+  "browser_snapshot",
+  "browser_click",
+  "browser_type",
+  "browser_fill_form",
+  "browser_select_option",
+  "browser_check",
+  "browser_uncheck",
+  "browser_press_key",
+  "browser_hover",
+  "browser_wait_for",
+  "browser_navigate_back",
+]);
+const MAX_MCP_TOOL_CALLS = 20;
+const MAX_MODEL_TURNS = 10;
 
-const isPatToken = (token: string): boolean => {
-  return token.startsWith("ghp_") || token.startsWith("github_pat_");
-};
+const toOllamaTool = (tool: { name: string; description?: string; inputSchema: unknown }): Tool => ({
+  type: "function",
+  function: {
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.inputSchema as Tool["function"]["parameters"],
+  },
+});
 
-const asProvider = (provider: string | undefined): LlmProvider => {
-  const raw = (provider ?? "auto").trim().toLowerCase();
-  if (raw === "copilot" || raw === "github-models") return raw;
-  return "auto";
-};
-
-const createClient = (apiKey: string, baseURL?: string): OpenAI => {
-  return new OpenAI({
-    apiKey,
-    baseURL,
-  });
-};
-
-const extractAssistantText = (content: unknown): string => {
-  if (typeof content === "string") return content;
-
-  if (Array.isArray(content)) {
-    const combined = content
-      .map((item) => {
-        if (typeof item === "string") return item;
-        if (typeof item === "object" && item != null) {
-          const value = (item as { text?: unknown }).text;
-          return typeof value === "string" ? value : "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-
-    return combined;
-  }
-
-  return "";
-};
-
-const callCopilotSdkModel = async (
-  apiToken: string,
+const callOllamaModel = async (
+  ollama: Pick<Ollama, "chat">,
   model: string,
   prompt: string,
   systemInstruction: string,
-): Promise<string> => {
-  const client = new CopilotClient({
-    gitHubToken: apiToken,
-    useLoggedInUser: false,
-  });
-
-  await client.start();
-
-  try {
-    const session = await client.createSession({
-      model,
-      onPermissionRequest: approveAll,
-      systemMessage: {
-        mode: "append",
-        content: systemInstruction,
-      },
-    });
-
-    try {
-      const response = await session.sendAndWait({ prompt }, 120_000);
-      const rawText = extractAssistantText(response?.data?.content);
-      if (!rawText.trim()) {
-        throw new Error("Copilot SDK returned empty content");
-      }
-
-      return rawText;
-    } finally {
-      await session.disconnect();
-    }
-  } finally {
-    await client.stop();
-  }
-};
-
-const callChatModel = async (
-  client: OpenAI,
-  model: string,
-  prompt: string,
-  systemInstruction: string,
-): Promise<string> => {
-  try {
-    const completion = await client.chat.completions.create({
-      model,
-      temperature: 0.1,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: systemInstruction,
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    });
-
-    const rawText = completion.choices[0]?.message?.content;
-    if (!rawText) {
-      throw new Error("Model SDK returned empty content");
-    }
-
-    return rawText;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/request body too large/i.test(message) || /413/.test(message)) {
-      throw new Error(
-        "LLM request too large for the model context window. Reduce the specification or snapshot size, or set a lower LLM_MAX_PROMPT_CHARS."
-      );
-    }
-    throw error;
-  }
-};
-
-const getResolvedProvider = (
-  provider: string | undefined,
-  apiToken: string,
-): Exclude<LlmProvider, "auto"> => {
-  const normalized = asProvider(provider);
-  return normalized === "auto" ? (isPatToken(apiToken) ? "github-models" : "copilot") : normalized;
-};
-
-const createRunContext = (
-  apiToken: string,
   options: LlmGenerationOptions,
-) => {
-  const provider = asProvider(options.provider);
-  const resolvedProvider = getResolvedProvider(options.provider, apiToken);
-  const copilotModel = options.copilotModel ?? "gpt-4.1";
-  const githubModelsModel = options.githubModelsModel ?? "openai/gpt-4.1";
-  const preferCopilotSdk = options.preferCopilotSdk ?? true;
+): Promise<string> => {
+  const transport = options.mcpClient
+    ? undefined
+    : new StdioClientTransport(resolvePlaywrightMcpLaunchConfig());
+  const ownedMcpClient = new Client({ name: "ollama-playwright-client", version: "1.0.0" });
+  const mcpClient = options.mcpClient ?? ownedMcpClient;
+  const messages: Message[] = [
+    { role: "system", content: systemInstruction },
+    { role: "user", content: prompt },
+  ];
 
-  const runWithCopilot = async (prompt: string): Promise<string> => {
-    if (preferCopilotSdk) {
-      try {
-        return await callCopilotSdkModel(
-          apiToken,
-          copilotModel,
-          prompt,
-          "You are GitHub Copilot for software test planning and generation.",
-        );
-      } catch (error) {
-        if (provider === "copilot") {
-          throw error;
+  try {
+    if (transport) await ownedMcpClient.connect(transport);
+    const availableTools = await mcpClient.listTools();
+    const tools = availableTools.tools
+      .filter((tool) => ALLOWED_PLAYWRIGHT_TOOLS.has(tool.name))
+      .map(toOllamaTool);
+    if (tools.length === 0) {
+      throw new Error("Playwright MCP did not expose any allowed browser tools");
+    }
+
+    let toolCallCount = 0;
+    for (let turn = 0; turn < MAX_MODEL_TURNS; turn += 1) {
+      const response = await ollama.chat({
+        model,
+        messages,
+        tools,
+        format: "json",
+        options: { temperature: 0.1 },
+      });
+      messages.push(response.message);
+
+      const toolCalls = response.message.tool_calls ?? [];
+      if (toolCalls.length === 0) {
+        const content = response.message.content.trim();
+        if (!content) throw new Error("Ollama returned empty content");
+        return content;
+      }
+
+      toolCallCount += toolCalls.length;
+      if (toolCallCount > MAX_MCP_TOOL_CALLS || turn === MAX_MODEL_TURNS - 1) {
+        throw new Error("Ollama exceeded the Playwright MCP tool-call limit");
+      }
+
+      for (const toolCall of toolCalls) {
+        const name = toolCall.function.name;
+        if (!ALLOWED_PLAYWRIGHT_TOOLS.has(name)) {
+          throw new Error(`Ollama requested a disallowed Playwright MCP tool: ${name}`);
         }
+        const result = await mcpClient.callTool({
+          name,
+          arguments: toolCall.function.arguments,
+        });
+        messages.push({
+          role: "tool",
+          tool_name: name,
+          content: JSON.stringify(result.content),
+        });
       }
     }
 
-    const client = createClient(apiToken, options.copilotApiUrl);
-    return callChatModel(client, copilotModel, prompt, "You are GitHub Copilot for software test planning and generation.");
-  };
-
-  const runWithGitHubModels = async (prompt: string): Promise<string> => {
-    const client = createClient(apiToken, options.githubModelsApiUrl);
-    return callChatModel(client, githubModelsModel, prompt, "You are an expert QA engineer for Playwright test generation.");
-  };
-
-  const runForPrompt = async (prompt: string): Promise<string> => {
-    if (resolvedProvider === "github-models") {
-      return runWithGitHubModels(prompt);
+    throw new Error("Ollama did not complete within the allowed model turns");
+  } finally {
+    if (!options.mcpClient) {
+      await ownedMcpClient.close().catch(() => undefined);
+      await transport?.close().catch(() => undefined);
     }
-    return runWithCopilot(prompt);
-  };
+  }
+};
 
-  return async (prompt: string): Promise<string> => {
-    try {
-      return await runForPrompt(prompt);
-    } catch (error) {
-      if (isUnsupportedTokenError(error) && provider === "auto") {
-        return runWithGitHubModels(prompt);
-      }
-      throw error;
-    }
-  };
+const createRunContext = (options: LlmGenerationOptions) => {
+  const model = options.ollamaModel ?? "qwen2.5-coder:7b";
+  const client = options.ollamaClient ?? new Ollama({ host: options.ollamaHost ?? "http://localhost:11434" });
+
+  return (prompt: string, systemInstruction: string): Promise<string> =>
+    callOllamaModel(client, model, prompt, systemInstruction, options);
 };
 
 export const generateTestPlans = async (
   payload: CopilotRequest,
   options: LlmGenerationOptions = {},
 ): Promise<TestPlan[]> => {
-  const apiToken = options.apiToken;
-  if (!apiToken) {
-    throw new Error("Missing API token for model generation");
-  }
-
-  const runPromptSafely = createRunContext(apiToken, options);
+  const runPromptSafely = createRunContext(options);
   const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
-  const plannerRaw = await runPromptSafely(buildPlannerPrompt(payload, maxPromptChars));
+  const plannerRaw = await runPromptSafely(
+    buildPlannerPrompt(payload, maxPromptChars),
+    "You are an expert QA lead. Use Playwright MCP browser tools when needed. Return only a JSON object containing the planned test cases.",
+  );
   const plannedCases = parseJsonArrayResponse<unknown>(plannerRaw).filter(isValidTestPlan);
 
   if (plannedCases.length === 0) {
@@ -612,12 +541,7 @@ export const generateSingleScript = async (
   plannedCase: TestPlan,
   options: LlmGenerationOptions = {},
 ): Promise<GeneratedTestCase> => {
-  const apiToken = options.apiToken;
-  if (!apiToken) {
-    throw new Error("Missing API token for model generation");
-  }
-
-  const runPromptSafely = createRunContext(apiToken, options);
+  const runPromptSafely = createRunContext(options);
   const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
 
   let scriptShape: string | undefined;
@@ -625,7 +549,10 @@ export const generateSingleScript = async (
   let normalizationApplied = false;
 
   try {
-    const generatorRaw = await runPromptSafely(buildGeneratorPrompt(payload, plannedCase, maxPromptChars));
+    const generatorRaw = await runPromptSafely(
+      buildAgentGenerationPrompt(payload, plannedCase),
+      "You are an autonomous QA agent. Use Playwright MCP browser tools to inspect and validate the flow, then return only JSON with id, title, and script.",
+    );
     const generated = toJsonObject<GeneratorResponse>(generatorRaw);
 
     if (!generated.id || !generated.title || !generated.script) {
@@ -690,7 +617,7 @@ export const generateTestsTwoPass = async (
   return results;
 };
 
-export const generateWithCopilot = async (
+export const generateWithOllama = async (
   payload: CopilotRequest,
   options: LlmGenerationOptions = {},
 ): Promise<GeneratedArtifact> => {

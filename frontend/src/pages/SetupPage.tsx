@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { useGithubSession } from '../context/GithubSessionContext';
+import { useAuth } from '../context/AuthContext';
 
 interface StepState {
   connecting: 'idle' | 'loading' | 'done' | 'error';
@@ -29,7 +29,7 @@ interface GenerationJobDoc {
 
 export default function SetupPage() {
   const navigate = useNavigate();
-  const { session } = useGithubSession();
+  const { user } = useAuth();
   const [url, setUrl] = useState('https://example.com');
   const [requirementsText, setRequirementsText] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -59,7 +59,6 @@ export default function SetupPage() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(session ? { Authorization: `Bearer ${session.sessionToken}` } : {}),
       },
       body: JSON.stringify({
         projectName: projectName || url,
@@ -98,8 +97,8 @@ export default function SetupPage() {
   };
 
   const handleGenerate = async () => {
-    if (!session) {
-      alert('กรุณาเข้าสู่ระบบด้วย GitHub OAuth ก่อนสร้างชุดทดสอบ');
+    if (!user) {
+      alert('กรุณาเข้าสู่ระบบก่อนสร้างชุดทดสอบ');
       return;
     }
 
@@ -124,6 +123,7 @@ export default function SetupPage() {
       formData.append('projectName', projectName || url);
       formData.append('requirements', requirementsText.trim());
       files.forEach(f => formData.append('files', f));
+      const idToken = await user.getIdToken();
 
       setStep('connecting', 'done');
       setStep('reading', 'done');
@@ -132,7 +132,7 @@ export default function SetupPage() {
       const res = await fetch(`${BACKEND_URL}/api/v2/generate-job`, {
         method: 'POST',
         headers: {
-          ...(session ? { Authorization: `Bearer ${session.sessionToken}` } : {}),
+          Authorization: `Bearer ${idToken}`,
         },
         body: formData,
       });
@@ -241,7 +241,7 @@ export default function SetupPage() {
     { key: 'connecting', label: 'Connecting to Target Website' },
         { key: 'reading', label: 'Reading Context Specification File(s) (Optional)' },
     { key: 'fetching', label: 'Fetching Accessibility Snapshot via MCP' },
-    { key: 'writing', label: 'Writing Playwright Scripts & Criteria with GitHub Copilot' },
+    { key: 'writing', label: 'Writing Playwright Scripts & Criteria with Ollama' },
   ];
 
   const stepIcon = (status: string) => {

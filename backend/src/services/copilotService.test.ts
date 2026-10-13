@@ -1,7 +1,42 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeGeneratedScript, parseJsonArrayResponse, validateGeneratedScript } from "./copilotService.js";
+import {
+  buildAgentGenerationPrompt,
+  generateSingleScript,
+  generateTestPlans,
+  normalizeGeneratedScript,
+  parseJsonArrayResponse,
+  validateGeneratedScript,
+  type LlmGenerationOptions,
+} from "./copilotService.js";
+
+const generationPayload = {
+  projectName: "Demo app",
+  targetUrl: "https://example.com",
+  specification: "Confirm the page loads",
+  accessibilitySnapshot: "heading Example Domain",
+};
+
+const mockMcpClient = (calls: string[] = []): NonNullable<LlmGenerationOptions["mcpClient"]> => ({
+  listTools: async () => ({
+    tools: [{
+      name: "browser_navigate",
+      description: "Open a page",
+      inputSchema: { type: "object", properties: { url: { type: "string" } } },
+    }],
+  }),
+  callTool: async ({ name, arguments: args }: { name: string; arguments: Record<string, unknown> }) => {
+    calls.push(`${name}:${String(args.url)}`);
+    return { content: [{ type: "text", text: "Page loaded" }] };
+  },
+}) as unknown as NonNullable<LlmGenerationOptions["mcpClient"]>;
+
+const mockOllamaClient = (
+  responses: Array<{ content: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> }>,
+): NonNullable<LlmGenerationOptions["ollamaClient"]> => ({
+  chat: async () => ({ message: responses.shift()! }),
+}) as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
 
 test("parseJsonArrayResponse accepts a raw JSON array", () => {
   const result = parseJsonArrayResponse(`[{"id":"TC-001","title":"Test"}]`);
@@ -103,4 +138,93 @@ test("normalizeGeneratedScript leaves normal playwright script unchanged", () =>
     `});\n`;
 
   assert.equal(normalizeGeneratedScript(normalScript), normalScript);
+});
+
+test("buildAgentGenerationPrompt includes target URL and MCP guidance", () => {
+  const prompt = buildAgentGenerationPrompt({
+    projectName: "Demo app",
+    targetUrl: "http://localhost:5173/",
+    specification: "Ensure login flow works",
+    accessibilitySnapshot: "heading Login",
+  }, {
+    id: "TC-001",
+    title: "Login flow",
+    description: "Verify login flow",
+    type: "UI",
+    expectedResult: "The login flow completes successfully",
+    testSteps: ["Open login page", "Submit credentials"],
+  });
+
+  assert.match(prompt, /Playwright MCP/i);
+  assert.match(prompt, /http:\/\/localhost:5173\//i);
+  assert.match(prompt, /Ensure login flow works/i);
+});
+
+test("generateTestPlans dispatches MCP calls and parses Ollama JSON", async () => {
+  const calls: string[] = [];
+  const ollamaClient = mockOllamaClient([
+    {
+      content: "",
+      tool_calls: [{
+        function: {
+          name: "browser_navigate",
+          arguments: { url: "https://example.com" },
+        },
+      }],
+    },
+    {
+      content: JSON.stringify({
+        plans: [{
+          id: "TC-001",
+          title: "Page loads",
+          description: "Verify the landing page",
+          type: "UI",
+          testSteps: ["Open the page"],
+          expectedResult: "The page is visible",
+        }],
+      }),
+    },
+  ]);
+
+  const plans = await generateTestPlans(generationPayload, {
+    ollamaClient,
+    mcpClient: mockMcpClient(calls),
+  });
+
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].id, "TC-001");
+  assert.deepEqual(calls, ["browser_navigate:https://example.com"]);
+});
+
+test("generateSingleScript validates an Ollama-generated Playwright script", async () => {
+  const script = `import { test, expect } from '@playwright/test';\n\n` +
+    `test('example', async ({ page }) => {\n` +
+    `  await page.goto('https://example.com');\n` +
+    `  await expect(page).toHaveTitle(/.+/);\n` +
+    `});\n`;
+
+  const generated = await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "Page loads",
+    description: "Verify the landing page",
+    type: "UI",
+    testSteps: ["Open the page"],
+    expectedResult: "The page is visible",
+  }, {
+    ollamaClient: mockOllamaClient([{ content: JSON.stringify({ id: "TC-001", title: "Page loads", script }) }]),
+    mcpClient: mockMcpClient(),
+  });
+
+  assert.equal(generated.script, script);
+  assert.doesNotThrow(() => validateGeneratedScript(generated.script));
+});
+
+test("generateTestPlans rejects malformed Ollama JSON", async () => {
+  await assert.rejects(
+    generateTestPlans(generationPayload, {
+      ollamaClient: mockOllamaClient([{ content: "not json" }]),
+      mcpClient: mockMcpClient(),
+    }),
+    /not a valid JSON payload/i,
+  );
 });

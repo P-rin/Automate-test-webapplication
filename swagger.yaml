@@ -1,0 +1,627 @@
+openapi: 3.0.3
+info:
+  title: Autonomous Verification API
+  version: 1.0.0
+  description: API for Firebase-authenticated Ollama generation, job tracking, saving, and execution of Playwright test cases. GitHub OAuth sessions remain separate.
+servers:
+  - url: http://localhost:4000
+    description: Local backend
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /api/auth/github:
+    post:
+      summary: Exchange GitHub OAuth code for a backend session
+      operationId: exchangeGitHubCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+              properties:
+                code:
+                  type: string
+                redirectUri:
+                  type: string
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitHubSessionResponse'
+        '400':
+          description: Invalid payload or OAuth exchange failed
+        '403':
+          description: Copilot subscription is not active
+  /api/auth/session:
+    get:
+      summary: Validate current backend session
+      operationId: getSession
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Session is valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionInfo'
+        '401':
+          description: Invalid or expired session
+  /api/auth/logout:
+    post:
+      summary: Revoke current backend session
+      operationId: logoutSession
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Session revoked
+  /api/generate:
+    post:
+      summary: Generate tests directly (legacy)
+      operationId: generateTestsLegacy
+      security:
+        - firebaseBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GenerationRequest'
+      responses:
+        '200':
+          description: Generated tests returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationResponse'
+        '400':
+          description: Invalid URL
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+  /api/generate-job:
+    post:
+      summary: Create a background generation job (legacy)
+      operationId: createGenerationJobLegacy
+      security:
+        - firebaseBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GenerationRequest'
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAcceptedResponse'
+        '400':
+          description: Invalid URL
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+  /api/v2/generate-job:
+    post:
+      summary: Create a background generation job (v2)
+      operationId: createGenerationJobV2
+      security:
+        - firebaseBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GenerationRequest'
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAcceptedV2Response'
+        '400':
+          description: Invalid URL
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+  /api/generate-test:
+    post:
+      summary: Create generation job for test generation workflow
+      operationId: createGenerationJobAlt
+      security:
+        - firebaseBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GenerationRequest'
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAcceptedV2Response'
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+  /api/generation-jobs/{jobId}:
+    get:
+      summary: Get generation job status (legacy)
+      operationId: getGenerationJobLegacy
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationJob'
+        '404':
+          description: Job not found
+  /api/v2/generation-jobs/{jobId}:
+    get:
+      summary: Get generation job status (v2)
+      operationId: getGenerationJobV2
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationJobV2'
+        '404':
+          description: Job not found
+  /api/save-test:
+    post:
+      summary: Save a generated test case
+      operationId: saveTestCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveTestRequest'
+      responses:
+        '201':
+          description: Test case saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveResponse'
+        '400':
+          description: Invalid payload
+  /api/save-generated:
+    post:
+      summary: Save generated artifact from frontend
+      operationId: saveGeneratedArtifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveGeneratedRequest'
+      responses:
+        '201':
+          description: Artifact saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveResponse'
+  /api/test-case-script:
+    patch:
+      summary: Update a saved test case script
+      operationId: updateTestCaseScript
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateScriptRequest'
+      responses:
+        '204':
+          description: Script updated
+        '400':
+          description: Invalid payload
+  /api/execute:
+    post:
+      summary: Execute selected test cases
+      operationId: executeTests
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+      responses:
+        '202':
+          description: Execution started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResponse'
+  /api/v2/execute:
+    post:
+      summary: Execute selected test cases with engine selection
+      operationId: executeTestsV2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteV2Request'
+      responses:
+        '202':
+          description: Execution started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResponseV2'
+  /api/v2/test-runs/{runId}:
+    get:
+      summary: Get execution run status
+      operationId: getTestRunStatus
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestRun'
+        '404':
+          description: Run not found
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: GitHub backend session token
+    firebaseBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Firebase Authentication ID token
+  schemas:
+    GitHubSessionResponse:
+      type: object
+      properties:
+        sessionToken:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserInfo'
+        copilot:
+          $ref: '#/components/schemas/CopilotInfo'
+        expiresAt:
+          type: integer
+          format: int64
+    SessionInfo:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/UserInfo'
+        copilot:
+          $ref: '#/components/schemas/CopilotInfo'
+        expiresAt:
+          type: integer
+          format: int64
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: integer
+        login:
+          type: string
+        name:
+          type: string
+          nullable: true
+        avatarUrl:
+          type: string
+        email:
+          type: string
+          nullable: true
+    CopilotInfo:
+      type: object
+      properties:
+        active:
+          type: boolean
+        reason:
+          type: string
+    GenerationRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri
+        projectName:
+          type: string
+        requirements:
+          type: string
+        files:
+          type: array
+          items:
+            type: string
+            format: binary
+    GenerationResponse:
+      type: object
+      properties:
+        title:
+          type: string
+        type:
+          type: string
+          enum: [UI, API]
+        criteria:
+          type: array
+          items:
+            type: string
+        script:
+          type: string
+        generatedTests:
+          type: array
+          items:
+            type: object
+        source:
+          type: object
+    JobAcceptedResponse:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+    JobAcceptedV2Response:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+        source:
+          type: object
+        watch:
+          type: object
+          properties:
+            collection:
+              type: string
+            docId:
+              type: string
+    GenerationJob:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        percentage:
+          type: integer
+        message:
+          type: string
+        errorMessage:
+          type: string
+          nullable: true
+        generatedTestCaseIds:
+          type: array
+          items:
+            type: string
+        plans:
+          type: array
+          items:
+            type: object
+        generatedTests:
+          type: array
+          items:
+            type: object
+        source:
+          type: object
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    GenerationJobV2:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/GenerationJob'
+    SaveTestRequest:
+      type: object
+      required:
+        - url
+        - projectName
+        - script
+        - title
+        - type
+      properties:
+        url:
+          type: string
+          format: uri
+        projectName:
+          type: string
+        script:
+          type: string
+        title:
+          type: string
+        type:
+          type: string
+          enum: [UI, API]
+        criteria:
+          type: array
+          items:
+            type: string
+    SaveGeneratedRequest:
+      type: object
+      required:
+        - projectName
+        - url
+        - generated
+      properties:
+        projectName:
+          type: string
+        url:
+          type: string
+          format: uri
+        generated:
+          type: object
+          properties:
+            title:
+              type: string
+            type:
+              type: string
+              enum: [UI, API]
+            criteria:
+              type: array
+              items:
+                type: string
+            script:
+              type: string
+    UpdateScriptRequest:
+      type: object
+      required:
+        - testCaseId
+        - script
+      properties:
+        testCaseId:
+          type: string
+        script:
+          type: string
+    SaveResponse:
+      type: object
+      properties:
+        id:
+          type: string
+    ExecuteRequest:
+      type: object
+      required:
+        - testCaseIds
+      properties:
+        testCaseIds:
+          type: array
+          items:
+            type: string
+    ExecuteV2Request:
+      type: object
+      required:
+        - testCaseIds
+      properties:
+        testCaseIds:
+          type: array
+          items:
+            type: string
+        engine:
+          type: string
+          enum: [playwright, mcp]
+    ExecutionResponse:
+      type: object
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+    ExecutionResponseV2:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/ExecutionResponse'
+        - type: object
+          properties:
+            watch:
+              type: object
+              properties:
+                collection:
+                  type: string
+                docId:
+                  type: string
+    TestRun:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        projectId:
+          type: string
+        projectName:
+          type: string
+        testCaseIds:
+          type: array
+          items:
+            type: string
+        passCount:
+          type: integer
+        failCount:
+          type: integer
+        totalDuration:
+          type: integer
+        logs:
+          type: array
+          items:
+            type: object
+        screenshotUrls:
+          type: array
+          items:
+            type: string
+        errorDetails:
+          type: object
+          nullable: true
+        caseResults:
+          type: array
+          items:
+            type: object
+        engineRequested:
+          type: string
+        engineUsed:
+          type: string
+        fallbackReason:
+          type: string
+          nullable: true
+        mcpTrace:
+          type: array
+          items:
+            type: object
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true

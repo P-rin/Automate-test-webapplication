@@ -1,7 +1,7 @@
 import { db, FieldValue } from "../lib/firestore.js";
 import { artifactToSavePayload, saveGeneratedTestCase } from "./testCaseService.js";
 import { fetchAccessibilitySnapshot } from "./snapshotService.js";
-import { generateSingleScript, generateTestPlans, LlmGenerationOptions } from "./copilotService.js";
+import { generateSingleScript, generateTestPlans, LlmGenerationOptions } from "./ollamaService.js";
 import type { GeneratedTestCase, TestPlan } from "../types.js";
 
 interface GenerationJobPayload {

@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { env } from "../config/env.js";
 
 interface GitHubOAuthTokenResponse {
@@ -40,8 +42,48 @@ export interface GitHubSession {
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 8; // 8 hours
 const sessions = new Map<string, GitHubSession>();
+const STORAGE_DIR = path.resolve(process.cwd(), "runtime");
+const STORAGE_FILE = path.join(STORAGE_DIR, "sessions.json");
 
 const githubApiBase = "https://api.github.com";
+
+const ensureSessionStorage = (): void => {
+  if (!fs.existsSync(STORAGE_DIR)) {
+    fs.mkdirSync(STORAGE_DIR, { recursive: true });
+  }
+};
+
+const loadSessionsFromDisk = (): void => {
+  ensureSessionStorage();
+  if (!fs.existsSync(STORAGE_FILE)) {
+    return;
+  }
+
+  try {
+    const payload = fs.readFileSync(STORAGE_FILE, "utf8");
+    if (!payload.trim()) {
+      return;
+    }
+
+    const parsed = JSON.parse(payload) as Record<string, GitHubSession>;
+    for (const [sessionToken, session] of Object.entries(parsed)) {
+      if (!session?.sessionToken || session.expiresAt <= Date.now()) {
+        continue;
+      }
+      sessions.set(sessionToken, session);
+    }
+  } catch {
+    // Ignore invalid persisted session data and fall back to an empty store.
+  }
+};
+
+const persistSessionsToDisk = (): void => {
+  ensureSessionStorage();
+  const payload = Object.fromEntries(sessions.entries());
+  fs.writeFileSync(STORAGE_FILE, JSON.stringify(payload, null, 2));
+};
+
+loadSessionsFromDisk();
 
 const cleanupExpiredSessions = (): void => {
   const now = Date.now();
@@ -50,13 +92,6 @@ const cleanupExpiredSessions = (): void => {
       sessions.delete(key);
     }
   }
-};
-
-const asRecord = (value: unknown): Record<string, unknown> => {
-  if (typeof value === "object" && value != null && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
 };
 
 const createGitHubHeaders = (accessToken: string): Record<string, string> => ({
@@ -131,51 +166,68 @@ export const fetchGithubUser = async (accessToken: string): Promise<GitHubSessio
 };
 
 export const verifyCopilotSubscription = async (accessToken: string): Promise<CopilotVerificationResult> => {
-  const response = await fetch(`${githubApiBase}/user/copilot/billing`, {
-    headers: createGitHubHeaders(accessToken),
+  const base = (env.copilotApiUrl ?? "https://api.githubcopilot.com").replace(/\/+$/, "");
+  const verifyUrl = `${base}/chat/completions`;
+
+  const response = await fetch(verifyUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": "autonomous-verification-layer",
+    },
+    // Keep payload minimal to verify token access with low latency and low token usage.
+    body: JSON.stringify({
+      model: env.copilotModel ?? "gpt-4.1",
+      messages: [{ role: "user", content: "ping" }],
+      max_tokens: 1,
+      temperature: 0,
+    }),
   });
 
-  if (response.status === 404) {
-    return {
-      active: false,
-      reason: "Copilot billing endpoint is not available for this account/token",
-    };
-  }
+  const rawBody = await response.text().catch(() => "");
+  const lowerBody = rawBody.toLowerCase();
 
-  if (!response.ok) {
-    return {
-      active: false,
-      reason: `Copilot billing check failed with status ${response.status}`,
-    };
-  }
-
-  const payload = asRecord(await response.json().catch(() => ({})));
-  const planType = typeof payload.plan_type === "string" ? payload.plan_type.toLowerCase() : "";
-  const hasSeat = typeof payload.seat_management_setting === "string" || typeof payload.seat_breakdown === "object";
-  const pendingCancel = payload.pending_cancellation_date;
-
-  const active = Boolean(planType && planType !== "none") || hasSeat;
-
-  if (!active) {
-    return {
-      active: false,
-      reason: "No active Copilot subscription detected",
-      raw: payload,
-    };
-  }
-
-  if (pendingCancel) {
+  if (response.status === 200) {
     return {
       active: true,
-      reason: "Active Copilot subscription detected (pending cancellation)",
-      raw: payload,
+      reason: "Copilot Chat endpoint is reachable with this token",
+    };
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    return {
+      active: false,
+      reason: `Copilot Chat permission check failed with status ${response.status}`,
+      raw: {
+        status: response.status,
+        body: rawBody,
+      },
+    };
+  }
+
+  if (
+    response.status === 400
+    && (lowerBody.includes("personal access tokens are not supported") || lowerBody.includes("third-party user token"))
+  ) {
+    return {
+      active: false,
+      reason: "Copilot Chat endpoint does not accept this token type",
+      raw: {
+        status: response.status,
+        body: rawBody,
+      },
     };
   }
 
   return {
     active: true,
-    reason: "Active Copilot subscription detected",
-    raw: payload,
+    reason: `Copilot Chat verification returned status ${response.status}; proceeding to runtime generation check`,
+    raw: {
+      status: response.status,
+      body: rawBody,
+    },
   };
 };
 
@@ -200,6 +252,7 @@ export const createGithubSession = (
   };
 
   sessions.set(sessionToken, session);
+  persistSessionsToDisk();
   return session;
 };
 
@@ -210,6 +263,7 @@ export const getGithubSession = (sessionToken: string): GitHubSession | null => 
 
   if (session.expiresAt <= Date.now()) {
     sessions.delete(sessionToken);
+    persistSessionsToDisk();
     return null;
   }
 
@@ -218,4 +272,5 @@ export const getGithubSession = (sessionToken: string): GitHubSession | null => 
 
 export const revokeGithubSession = (sessionToken: string): void => {
   sessions.delete(sessionToken);
+  persistSessionsToDisk();
 };
