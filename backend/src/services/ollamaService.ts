@@ -1,9 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Ollama } from "ollama";
-import type { Message, Tool } from "ollama";
+import type { ChatResponse, Message, Tool } from "ollama";
 import type { GeneratedArtifact, GeneratedTestCase, TestPlan } from "../types.js";
 import { resolvePlaywrightMcpLaunchConfig } from "./snapshotService.js";
+import { createOllamaDebugFetch, serializeOllamaDebugError, writeOllamaDebugRecord } from "../debug/ollamaDebug.js";
 
 interface CopilotRequest {
   projectName: string;
@@ -74,6 +75,11 @@ export interface LlmGenerationOptions {
   maxPromptChars?: number;
   ollamaClient?: Pick<Ollama, "chat">;
   mcpClient?: Pick<Client, "listTools" | "callTool">;
+  debugContext?: {
+    jobId: string;
+    stage: "planner" | "script";
+    planId?: string;
+  };
 }
 
 const DEFAULT_LLM_MAX_PROMPT_CHARS = 14000;
@@ -485,13 +491,26 @@ const callOllamaModel = async (
 
     let toolCallCount = 0;
     for (let turn = 0; turn < MAX_MODEL_TURNS; turn += 1) {
-      const response = await ollama.chat({
-        model,
-        messages,
-        tools,
-        format: responseFormat,
-        options: { temperature: 0.1 },
-      });
+      let response: ChatResponse;
+      try {
+        response = await ollama.chat({
+          model,
+          messages,
+          tools,
+          format: responseFormat,
+          options: { temperature: 0.1 },
+        });
+      } catch (error) {
+        if (options.debugContext) {
+          await writeOllamaDebugRecord(options.debugContext, {
+            event: "chat-error",
+            turn: turn + 1,
+            error: serializeOllamaDebugError(error),
+          });
+        }
+        throw error;
+      }
+
       messages.push(response.message);
 
       const toolCalls = response.message.tool_calls ?? [];
@@ -534,7 +553,10 @@ const callOllamaModel = async (
 
 const createRunContext = (options: LlmGenerationOptions) => {
   const model = options.ollamaModel ?? "qwen2.5-coder:7b";
-  const client = options.ollamaClient ?? new Ollama({ host: options.ollamaHost ?? "http://localhost:11434" });
+  const client = options.ollamaClient ?? new Ollama({
+    host: options.ollamaHost ?? "http://localhost:11434",
+    ...(options.debugContext ? { fetch: createOllamaDebugFetch(options.debugContext) } : {}),
+  });
 
   return (prompt: string, systemInstruction: string, responseFormat: object): Promise<string> =>
     callOllamaModel(client, model, prompt, systemInstruction, responseFormat, options);

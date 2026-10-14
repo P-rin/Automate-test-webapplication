@@ -101,7 +101,10 @@ export const processGenerateJob = async (
         specification: payload.specification,
         accessibilitySnapshot: snapshot,
       },
-      options,
+      {
+        ...options,
+        debugContext: { jobId, stage: "planner" },
+      },
     );
 
     await updateGenerationJob(jobId, {
@@ -133,7 +136,10 @@ export const processGenerateJob = async (
             accessibilitySnapshot: snapshot,
           },
           plan,
-          options,
+          {
+            ...options,
+            debugContext: { jobId, stage: "script", planId: plan.id },
+          },
         );
 
         generatedTests.push(generated);
