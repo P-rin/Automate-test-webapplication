@@ -20,6 +20,18 @@ interface SnapshotStep {
   snapshot: string;
 }
 
+export interface AccessibilityDiscoveryResult {
+  snapshots: SnapshotStep[];
+  complete: boolean;
+  stopReason?: string;
+}
+
+export interface AccessibilityDiscoveryLimits {
+  maxSnapshots: number;
+  maxCandidates: number;
+  maxDepth: number;
+}
+
 interface BrowserSessionState {
   localStorage: Record<string, string>;
   sessionStorage: Record<string, string>;
@@ -214,10 +226,11 @@ const crawlInternalRoutes = async (
   maxSnapshots: number,
   maxDepth: number,
   authState: BrowserSessionState | null,
-): Promise<SnapshotStep[]> => {
+): Promise<{ snapshots: SnapshotStep[]; incomplete: boolean }> => {
   const snapshots: SnapshotStep[] = [];
   const visited = new Set<string>();
   const queue = [...new Set(startUrls.filter(Boolean))].map((url) => ({ url, depth: 1 }));
+  let incomplete = false;
 
   while (queue.length > 0 && snapshots.length < maxSnapshots) {
     const current = queue.shift()!;
@@ -241,21 +254,28 @@ const crawlInternalRoutes = async (
 
       if (snapshots.length >= maxSnapshots) break;
 
+      const childLinks = await collectInternalLinks(client, currentUrl);
       if (current.depth < maxDepth) {
-        const childLinks = await collectInternalLinks(client, currentUrl);
         for (const link of childLinks) {
           if (!visited.has(link) && !queue.some((item) => item.url === link)) {
             queue.push({ url: link, depth: current.depth + 1 });
           }
         }
+      } else if (childLinks.some((link) => !visited.has(link))) {
+        incomplete = true;
       }
     } catch (error) {
       console.warn(`crawlInternalRoutes: skipped ${currentUrl} due to error:`, error instanceof Error ? error.message : error);
+      incomplete = true;
       continue;
     }
   }
 
-  return snapshots;
+  if (queue.some((item) => !visited.has(item.url))) {
+    incomplete = true;
+  }
+
+  return { snapshots, incomplete };
 };
 
 const parseSnapshotElements = (snapshot: string): SnapshotElement[] => {
@@ -462,41 +482,78 @@ const getExplorationCandidates = (snapshot: string): SnapshotElement[] => {
   return candidates;
 };
 
+const snapshotFingerprint = (snapshot: string): string => {
+  const url = extractUrlFromSnapshot(snapshot);
+  const normalizedTree = snapshot
+    .replace(/\[ref=[^\]]+\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${url}\n${normalizedTree}`;
+};
+
 const exploreClickableRoutes = async (
   client: Client,
   baseSnapshot: string,
   maxCandidates: number,
   remainingBudget: number,
-): Promise<SnapshotStep[]> => {
+  authState: BrowserSessionState | null,
+  knownSnapshots: Set<string>,
+): Promise<{ snapshots: SnapshotStep[]; incomplete: boolean; examinedCandidates: number }> => {
   const steps: SnapshotStep[] = [];
-  if (remainingBudget <= 0) return steps;
-
   const baseUrl = extractUrlFromSnapshot(baseSnapshot);
-  const candidates = getExplorationCandidates(baseSnapshot).slice(0, maxCandidates);
+  const allCandidates = getExplorationCandidates(baseSnapshot);
+  const candidates = allCandidates.slice(0, maxCandidates);
+  let incomplete = allCandidates.length > candidates.length;
+  if (remainingBudget <= 0) {
+    return { snapshots: steps, incomplete: incomplete || allCandidates.length > 0, examinedCandidates: 0 };
+  }
 
+  let examinedCandidates = 0;
   for (const candidate of candidates) {
-    if (steps.length >= remainingBudget) break;
+    if (steps.length >= remainingBudget) {
+      incomplete = true;
+      break;
+    }
 
     try {
-      await client.callTool({ name: "browser_click", arguments: { target: candidate.ref } });
+      await client.callTool({ name: "browser_navigate", arguments: { url: baseUrl } });
+      if (authState) await restoreBrowserSessionState(client, authState);
+      const freshSnapshot = await collectSnapshot(client, "Refresh interactive state");
+      const candidateKey = `${candidate.role}:${normalizeText(candidate.name)}`;
+      const freshCandidate = getExplorationCandidates(freshSnapshot.snapshot)
+        .find((element) => `${element.role}:${normalizeText(element.name)}` === candidateKey);
+      if (!freshCandidate) {
+        examinedCandidates += 1;
+        incomplete = true;
+        continue;
+      }
+
+      await client.callTool({ name: "browser_click", arguments: { target: freshCandidate.ref } });
       const snapshotStep = await collectSnapshot(client, `Explore: ${candidate.name}`);
-      const nextUrl = extractUrlFromSnapshot(snapshotStep.snapshot);
-      if (snapshotStep.snapshot !== baseSnapshot) {
+      examinedCandidates += 1;
+      const fingerprint = snapshotFingerprint(snapshotStep.snapshot);
+      if (!knownSnapshots.has(fingerprint)) {
+        knownSnapshots.add(fingerprint);
         steps.push(snapshotStep);
       }
-      if (nextUrl && baseUrl && nextUrl !== baseUrl) {
-        await client.callTool({ name: "browser_navigate_back", arguments: {} });
-        await collectSnapshot(client, `Returned from: ${candidate.name}`);
-      }
     } catch {
-      // Ignore non-interactable or unstable targets and keep exploring others.
+      examinedCandidates += 1;
+      incomplete = true;
     }
   }
 
-  return steps;
+  return { snapshots: steps, incomplete, examinedCandidates };
 };
 
-export const fetchAccessibilitySnapshot = async (url: string, specification = ""): Promise<string> => {
+export const discoverAccessibilitySnapshot = async (
+  url: string,
+  specification = "",
+  limits: AccessibilityDiscoveryLimits = {
+    maxSnapshots: env.generationJobMaxSnapshots,
+    maxCandidates: env.generationJobMaxCandidates,
+    maxDepth: env.generationJobMaxDepth,
+  },
+): Promise<AccessibilityDiscoveryResult> => {
   const { command, args } = resolvePlaywrightMcpLaunchConfig();
   const transport = new StdioClientTransport({ command, args });
   const client = new Client({ name: "autonomous-verification-backend", version: "1.0.0" });
@@ -505,6 +562,7 @@ export const fetchAccessibilitySnapshot = async (url: string, specification = ""
 
   try {
     const snapshots: SnapshotStep[] = [];
+    let incomplete = false;
     await client.callTool({ name: "browser_navigate", arguments: { url } });
     const landingStep = await collectSnapshot(client, "Landing page");
     snapshots.push(landingStep);
@@ -518,31 +576,57 @@ export const fetchAccessibilitySnapshot = async (url: string, specification = ""
     const explorationBase = loginStep?.snapshot ?? landingStep.snapshot;
     const baseUrl = extractUrlFromSnapshot(explorationBase) || url;
     const routeUrls = await collectInternalLinks(client, baseUrl);
-    const remainingBudget = Math.max(0, env.playwrightExploreMaxSnapshots - snapshots.length);
+    const remainingBudget = Math.max(0, limits.maxSnapshots - snapshots.length);
 
     if (routeUrls.length > 0 && remainingBudget > 0) {
-      const routeSnapshots = await crawlInternalRoutes(
+      const routeResult = await crawlInternalRoutes(
         client,
         routeUrls,
         remainingBudget,
-        env.playwrightExploreMaxDepth,
+        limits.maxDepth,
         authState,
       );
-      snapshots.push(...routeSnapshots);
+      snapshots.push(...routeResult.snapshots);
+      incomplete ||= routeResult.incomplete;
+    } else if (routeUrls.length > 0) {
+      incomplete = true;
     }
 
-    const fallbackBudget = Math.max(0, env.playwrightExploreMaxSnapshots - snapshots.length);
-    if (fallbackBudget > 0) {
-      const explorationSteps = await exploreClickableRoutes(
+    const knownSnapshots = new Set(snapshots.map((step) => snapshotFingerprint(step.snapshot)));
+    let stateIndex = 0;
+    let examinedCandidates = 0;
+    while (stateIndex < snapshots.length) {
+      const stateSnapshot = snapshots[stateIndex].snapshot;
+      const availableCandidates = getExplorationCandidates(stateSnapshot).length;
+      const remainingCandidateBudget = Math.max(0, limits.maxCandidates - examinedCandidates);
+      const remainingSnapshotBudget = Math.max(0, limits.maxSnapshots - snapshots.length);
+      if (remainingCandidateBudget === 0 || remainingSnapshotBudget === 0) {
+        if (availableCandidates > 0) incomplete = true;
+        if (incomplete) break;
+        stateIndex += 1;
+        continue;
+      }
+
+      const explorationResult = await exploreClickableRoutes(
         client,
-        explorationBase,
-        env.playwrightExploreMaxCandidates,
-        fallbackBudget,
+        stateSnapshot,
+        remainingCandidateBudget,
+        remainingSnapshotBudget,
+        authState,
+        knownSnapshots,
       );
-      snapshots.push(...explorationSteps);
+      examinedCandidates += explorationResult.examinedCandidates;
+      snapshots.push(...explorationResult.snapshots);
+      incomplete ||= explorationResult.incomplete;
+      stateIndex += 1;
+      if (incomplete && (examinedCandidates >= limits.maxCandidates || snapshots.length >= limits.maxSnapshots)) break;
     }
 
-    return snapshots.map(summarizeSnapshotStep).join("\n\n");
+    return {
+      snapshots,
+      complete: !incomplete,
+      ...(incomplete ? { stopReason: "Exploration safety budget reached or a discovered page/state could not be inspected" } : {}),
+    };
   } finally {
     try {
       await client.callTool({ name: "browser_close", arguments: {} });
@@ -551,4 +635,13 @@ export const fetchAccessibilitySnapshot = async (url: string, specification = ""
     }
     await transport.close();
   }
+};
+
+export const fetchAccessibilitySnapshot = async (url: string, specification = ""): Promise<string> => {
+  const result = await discoverAccessibilitySnapshot(url, specification, {
+    maxSnapshots: env.playwrightExploreMaxSnapshots,
+    maxCandidates: env.playwrightExploreMaxCandidates,
+    maxDepth: env.playwrightExploreMaxDepth,
+  });
+  return result.snapshots.map(summarizeSnapshotStep).join("\n\n");
 };

@@ -7,6 +7,7 @@ const makeResponse = () => {
   let statusCode = 200;
   let body: unknown;
   const response = {
+    locals: {} as Record<string, unknown>,
     status(code: number) {
       statusCode = code;
       return this;
@@ -37,6 +38,7 @@ test("Firebase auth middleware accepts a verified bearer token", async () => {
   assert.equal(verifiedToken, "firebase-id-token");
   assert.equal(nextCalled, true);
   assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.response.locals.firebaseUser, { uid: "firebase-user" });
 });
 
 test("Firebase auth middleware rejects missing bearer tokens", async () => {

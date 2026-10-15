@@ -1,7 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 
 interface StepState {
@@ -19,12 +17,32 @@ interface GeneratedJobTest {
   script?: string;
 }
 
+interface GenerationJobCase {
+  id: string;
+  sequence: number;
+  title: string;
+  page: string;
+  status: 'planned' | 'generating' | 'saved' | 'failed';
+  testCaseId?: string;
+  errorMessage?: string;
+}
+
 interface GenerationJobDoc {
   status?: string;
   percentage?: number;
+  stage?: string;
   message?: string;
   errorMessage?: string;
-  generatedTests?: GeneratedJobTest[];
+  caseCount?: number;
+  completedCaseCount?: number;
+  failedCaseCount?: number;
+  snapshotCount?: number;
+  processedSnapshotCount?: number;
+  coverageComplete?: boolean;
+  coverageStopReason?: string;
+  primaryGeneratedTest?: GeneratedJobTest;
+  cases?: GenerationJobCase[];
+  caseCursor?: string;
 }
 
 export default function SetupPage() {
@@ -42,6 +60,15 @@ export default function SetupPage() {
   const [jobPercentage, setJobPercentage] = useState(0);
   const [jobMessage, setJobMessage] = useState('');
   const [jobError, setJobError] = useState('');
+  const [jobStage, setJobStage] = useState('');
+  const [jobCaseCount, setJobCaseCount] = useState(0);
+  const [jobCompletedCaseCount, setJobCompletedCaseCount] = useState(0);
+  const [jobFailedCaseCount, setJobFailedCaseCount] = useState(0);
+  const [jobSnapshotCount, setJobSnapshotCount] = useState(0);
+  const [jobProcessedSnapshotCount, setJobProcessedSnapshotCount] = useState(0);
+  const [coverageComplete, setCoverageComplete] = useState(false);
+  const [coverageStopReason, setCoverageStopReason] = useState('');
+  const [jobCases, setJobCases] = useState<GenerationJobCase[]>([]);
   const [steps, setSteps] = useState<StepState>({
     connecting: 'idle', reading: 'idle', fetching: 'idle', writing: 'idle',
   });
@@ -115,6 +142,15 @@ export default function SetupPage() {
     setJobPercentage(0);
     setJobMessage('');
     setJobError('');
+    setJobStage('');
+    setJobCaseCount(0);
+    setJobCompletedCaseCount(0);
+    setJobFailedCaseCount(0);
+    setJobSnapshotCount(0);
+    setJobProcessedSnapshotCount(0);
+    setCoverageComplete(false);
+    setCoverageStopReason('');
+    setJobCases([]);
     setSteps({ connecting: 'loading', reading: 'idle', fetching: 'idle', writing: 'idle' });
 
     try {
@@ -160,36 +196,69 @@ export default function SetupPage() {
   };
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId || !user) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'generationJobs', jobId), (snapshot) => {
-      if (!snapshot.exists()) {
-        setJobError('Generation job does not exist');
-        setStep('writing', 'error');
-        return;
+    let cancelled = false;
+    let timeoutId: number | undefined;
+    let caseCursor: string | undefined;
+    let primaryScriptLoaded = false;
+    const casesById = new Map<string, GenerationJobCase>();
+    const pollJob = async () => {
+      try {
+        const idToken = await user.getIdToken();
+        const params = new URLSearchParams();
+        if (caseCursor) params.set('since', caseCursor);
+        if (primaryScriptLoaded) params.set('includePrimaryScript', 'false');
+        const query = params.size > 0 ? `?${params.toString()}` : '';
+        const response = await fetch(`${BACKEND_URL}/api/v2/generation-jobs/${jobId}${query}`, {
+          headers: { Authorization: `Bearer ${idToken}` },
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json() as GenerationJobDoc;
+        if (cancelled) return;
+
+        setJobStatus(data.status ?? 'pending');
+        setJobPercentage(data.percentage ?? 0);
+        setJobStage(data.stage ?? '');
+        setJobMessage(data.message ?? '');
+        setJobError(data.errorMessage ?? '');
+        setJobCaseCount(data.caseCount ?? 0);
+        setJobCompletedCaseCount(data.completedCaseCount ?? 0);
+        setJobFailedCaseCount(data.failedCaseCount ?? 0);
+        setJobSnapshotCount(data.snapshotCount ?? 0);
+        setJobProcessedSnapshotCount(data.processedSnapshotCount ?? 0);
+        setCoverageComplete(data.coverageComplete ?? false);
+        setCoverageStopReason(data.coverageStopReason ?? '');
+        for (const jobCase of data.cases ?? []) casesById.set(jobCase.id, jobCase);
+        caseCursor = data.caseCursor ?? caseCursor;
+        setJobCases(Array.from(casesById.values()).sort((left, right) => left.sequence - right.sequence));
+
+        const primaryScript = data.primaryGeneratedTest?.script;
+        if (primaryScript) {
+          primaryScriptLoaded = true;
+          setGeneratedCode(primaryScript);
+        }
+
+        if (data.status === 'completed') {
+          setStep('writing', 'done');
+        } else if (data.status === 'failed' || data.status === 'incomplete') {
+          setStep('writing', 'error');
+        } else {
+          timeoutId = window.setTimeout(() => void pollJob(), 5000);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setJobError(error instanceof Error ? error.message : String(error));
+        timeoutId = window.setTimeout(() => void pollJob(), 5000);
       }
+    };
 
-      const data = snapshot.data() as GenerationJobDoc;
-      setJobStatus(data.status ?? 'pending');
-      setJobPercentage(data.percentage ?? 0);
-      setJobMessage(data.message ?? '');
-      setJobError(data.errorMessage ?? '');
-
-      const generatedTests = data.generatedTests ?? [];
-      const primaryScript = generatedTests.find((testCase) => typeof testCase.script === 'string' && testCase.script.trim())?.script;
-      if (primaryScript) {
-        setGeneratedCode(primaryScript);
-      }
-
-      if (data.status === 'completed') {
-        setStep('writing', 'done');
-      } else if (data.status === 'failed') {
-        setStep('writing', 'error');
-      }
-    });
-
-    return () => unsubscribe();
-  }, [jobId]);
+    void pollJob();
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [jobId, user]);
 
   const handleSave = async () => {
     if (!generatedCode) return;
@@ -348,13 +417,38 @@ export default function SetupPage() {
           <div className="text-sm text-gray-700 space-y-2">
             <p><span className="font-medium">Job ID:</span> {jobId}</p>
             <p><span className="font-medium">สถานะ:</span> {jobStatus || 'pending'}</p>
+            <p><span className="font-medium">ขั้นตอน:</span> {jobStage || 'กำลังรอการประมวลผล'}</p>
             <p><span className="font-medium">ความคืบหน้า:</span> {jobPercentage}%</p>
+            <p><span className="font-medium">เคส:</span> {jobCompletedCaseCount} บันทึกแล้ว / {jobCaseCount} วางแผนแล้ว / {jobFailedCaseCount} ล้มเหลว</p>
+            <p><span className="font-medium">หน้า/สถานะที่สำรวจ:</span> {jobProcessedSnapshotCount}/{jobSnapshotCount}</p>
             <p><span className="font-medium">ข้อความ:</span> {jobMessage || 'กำลังรอการประมวลผล'}</p>
             {jobError && <p className="text-red-600"><span className="font-medium">ข้อผิดพลาด:</span> {jobError}</p>}
+            {jobStatus === 'incomplete' && (
+              <p className="text-amber-700"><span className="font-medium">Coverage ยังไม่ครบ:</span> {coverageStopReason || jobMessage}</p>
+            )}
+            {coverageComplete && jobStatus !== 'running' && jobStatus !== 'incomplete' && (
+              <p className="text-green-700">ตรวจสอบ coverage ที่ค้นพบครบแล้ว</p>
+            )}
           </div>
           <div className="w-full bg-gray-100 rounded-full h-2 mt-3 overflow-hidden">
             <div className="h-2 bg-blue-600" style={{ width: `${Math.min(jobPercentage, 100)}%` }} />
           </div>
+          {jobCases.length > 0 && (
+            <ol className="mt-4 divide-y divide-gray-100 border-t border-gray-100">
+              {jobCases.map((testCase) => (
+                <li key={testCase.id} className="py-3 text-sm">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <span className="font-medium text-gray-800">{testCase.sequence}. {testCase.title}</span>
+                    <span className={testCase.status === 'failed' ? 'text-red-600' : testCase.status === 'saved' ? 'text-green-700' : 'text-blue-700'}>
+                      {testCase.status}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">{testCase.page}</p>
+                  {testCase.errorMessage && <p className="mt-1 text-xs text-red-600">{testCase.errorMessage}</p>}
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       )}
 

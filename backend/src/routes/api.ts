@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
+import { Timestamp } from "../lib/firestore.js";
 import { env } from "../config/env.js";
 import {
   createGithubSession,
@@ -12,11 +13,11 @@ import {
 } from "../services/githubAuthService.js";
 import { generateTestsTwoPass } from "../services/ollamaService.js";
 import { requireFirebaseAuth } from "../services/firebaseAuthService.js";
-import { createGenerationJob, getGenerationJob, processGenerateJob } from "../services/generationJobService.js";
+import { createGenerationJob, getGenerationJob, listGenerationJobCases, processGenerateJob } from "../services/generationJobService.js";
 import { getTestRun, startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
 import { readSpecFiles } from "../services/specReader.js";
-import { artifactToSavePayload, saveGeneratedTestCase, updateTestCaseScript } from "../services/testCaseService.js";
+import { artifactToSavePayload, getTestCasesByIds, saveGeneratedTestCase, updateTestCaseScript } from "../services/testCaseService.js";
 import { isValidTargetUrl } from "../utils/project.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 10 } });
@@ -43,6 +44,12 @@ const updateScriptSchema = z.object({
   testCaseId: z.string().min(1),
   script: z.string().min(1),
 });
+
+const getFirebaseUid = (res: { locals: Record<string, unknown> }): string => {
+  const firebaseUser = res.locals.firebaseUser as { uid?: unknown } | undefined;
+  if (typeof firebaseUser?.uid !== "string") throw new Error("Firebase authentication is required");
+  return firebaseUser.uid;
+};
 
 const githubExchangeSchema = z.object({
   code: z.string().min(1),
@@ -192,9 +199,9 @@ apiRouter.post("/generate", requireFirebaseAuth, upload.array("files"), async (r
   }
 });
 
-apiRouter.get("/generation-jobs/:jobId", async (req, res) => {
+apiRouter.get("/generation-jobs/:jobId", requireFirebaseAuth, async (req, res) => {
   try {
-    const job = await getGenerationJob(req.params.jobId);
+    const job = await getGenerationJob(req.params.jobId, getFirebaseUid(res));
     return res.json(job);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -202,18 +209,38 @@ apiRouter.get("/generation-jobs/:jobId", async (req, res) => {
   }
 });
 
-apiRouter.get("/v2/generation-jobs/:jobId", async (req, res) => {
+apiRouter.get("/v2/generation-jobs/:jobId", requireFirebaseAuth, async (req, res) => {
   try {
-    const job = await getGenerationJob(req.params.jobId);
+    const job = await getGenerationJob(req.params.jobId, getFirebaseUid(res));
+    const rawCursor = typeof req.query.since === "string" ? req.query.since : "";
+    const cursorParts = rawCursor.match(/^(\d+):(\d+)$/);
+    const updatedAfter = cursorParts
+      ? new Timestamp(Number(cursorParts[1]), Number(cursorParts[2]))
+      : undefined;
+    const { cases, cursor } = await listGenerationJobCases(req.params.jobId, updatedAfter);
+    const primaryMeta = job.primaryGeneratedTest as { id?: unknown; title?: unknown } | undefined;
+    const primaryId = typeof primaryMeta?.id === "string" ? primaryMeta.id : "";
+    const includePrimaryScript = req.query.includePrimaryScript !== "false";
+    const primaryCase = includePrimaryScript && primaryId ? (await getTestCasesByIds([primaryId]))[0] : undefined;
     return res.json({
       id: job.id,
       status: job.status,
       percentage: job.percentage,
+      stage: job.stage,
       message: job.message,
       errorMessage: job.errorMessage,
-      generatedTestCaseIds: job.generatedTestCaseIds,
-      plans: job.plans,
-      generatedTests: job.generatedTests,
+      caseCount: job.caseCount,
+      completedCaseCount: job.completedCaseCount,
+      failedCaseCount: job.failedCaseCount,
+      snapshotCount: job.snapshotCount,
+      processedSnapshotCount: job.processedSnapshotCount,
+      coverageComplete: job.coverageComplete,
+      coverageStopReason: job.coverageStopReason,
+      primaryGeneratedTest: primaryCase
+        ? { id: primaryCase.id, title: String(primaryMeta?.title ?? ""), script: primaryCase.script }
+        : undefined,
+      cases,
+      caseCursor: cursor,
       source: job.source,
       startedAt: job.startedAt,
       completedAt: job.completedAt,
@@ -243,6 +270,7 @@ apiRouter.post("/generate-job", requireFirebaseAuth, upload.array("files"), asyn
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      ownerUid: getFirebaseUid(res),
     });
 
     void processGenerateJob(jobId, {
@@ -280,6 +308,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      ownerUid: getFirebaseUid(res),
     });
 
     void processGenerateJob(jobId, {
@@ -329,6 +358,7 @@ apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), asy
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      ownerUid: getFirebaseUid(res),
     });
 
     void processGenerateJob(jobId, {

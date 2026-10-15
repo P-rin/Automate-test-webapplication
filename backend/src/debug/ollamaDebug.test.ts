@@ -65,3 +65,26 @@ test("Ollama debug fetch records nested transport error causes and rethrows", as
   assert.equal(error.message, "fetch failed");
   assert.equal(error.cause.code, "UND_ERR_HEADERS_TIMEOUT");
 });
+
+test("Ollama debug fetch records numeric model performance metrics", async () => {
+  const records: OllamaDebugRecord[] = [];
+  const debugFetch = createOllamaDebugFetch(
+    context,
+    async () => new Response(JSON.stringify({
+      done: true,
+      total_duration: 1200,
+      prompt_eval_count: 321,
+      eval_count: 42,
+      privatePrompt: "must not be included in metrics",
+    }), { status: 200 }),
+    async (_context, record) => { records.push(record); },
+  );
+
+  await debugFetch("http://localhost:11434/api/chat", { method: "POST", body: "{}" });
+
+  assert.deepEqual(records[1].modelMetrics, {
+    total_duration: 1200,
+    prompt_eval_count: 321,
+    eval_count: 42,
+  });
+});

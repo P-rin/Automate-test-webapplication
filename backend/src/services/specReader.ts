@@ -24,7 +24,7 @@ export const readSpecFiles = (files: Express.Multer.File[]): ReadSpecResult => {
       throw new Error(`Unsupported file type: ${file.originalname}`);
     }
     fileNames.push(file.originalname);
-    chunks.push(`### ${file.originalname}\n${file.buffer.toString("utf-8")}`);
+    chunks.push(file.buffer.toString("utf-8"));
   }
 
   return {

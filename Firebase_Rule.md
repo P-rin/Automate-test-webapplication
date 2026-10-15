@@ -4,7 +4,8 @@
 
 - ข้อมูลหลักเก็บใน Firestore (`testCases`, `testRuns`)
 - รูป screenshot ไม่ใช้ Firebase Storage (ใช้ Local static server)
-- Frontend ฟังข้อมูลด้วย `onSnapshot()`
+- Frontend อ่าน `testCases` และ `testRuns` จาก Firestore
+- Frontend อ่านสถานะ generation job ผ่าน authenticated backend API; ไม่อ่าน `generationJobs` จาก Firestore โดยตรง
 
 ## 1) Firestore Rules (โหมดที่ควรใช้ตอนนี้: มี Login/Register)
 

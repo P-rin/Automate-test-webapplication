@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   buildAgentGenerationPrompt,
+  generateNextTestPlan,
+  processSnapshotTestPlans,
   generateSingleScript,
   generateTestPlans,
   normalizeGeneratedScript,
@@ -219,6 +221,117 @@ test("generateSingleScript validates an Ollama-generated Playwright script", asy
   assert.doesNotThrow(() => validateGeneratedScript(generated.script));
 });
 
+test("generateSingleScript preserves the assigned plan when the snapshot is long", async () => {
+  const script = `import { test, expect } from '@playwright/test';\n\n` +
+    `test('assigned plan', async ({ page }) => {\n` +
+    `  await page.goto('https://example.com');\n` +
+    `  await expect(page).toHaveTitle(/.+/);\n` +
+    `});\n`;
+  const plan = {
+    id: "TC-KEEP-001",
+    title: "UNIQUE_ASSIGNED_PLAN_TITLE",
+    description: "UNIQUE_ASSIGNED_PLAN_DESCRIPTION",
+    type: "UI" as const,
+    testSteps: ["UNIQUE_ASSIGNED_PLAN_STEP"],
+    expectedResult: "UNIQUE_ASSIGNED_EXPECTED_RESULT",
+  };
+  let userPrompt = "";
+  const ollamaClient = {
+    chat: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      userPrompt = request.messages.find((message) => message.role === "user")?.content ?? "";
+      return {
+        message: {
+          content: JSON.stringify({ id: plan.id, title: plan.title, script }),
+        },
+      };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  await generateSingleScript({
+    ...generationPayload,
+    accessibilitySnapshot: "UNIQUE_SNAPSHOT_ELEMENT\n".repeat(2000),
+  }, plan, {
+    ollamaClient,
+    mcpClient: mockMcpClient(),
+  });
+
+  assert.ok(userPrompt.length < 14000);
+  assert.match(userPrompt, /UNIQUE_ASSIGNED_PLAN_TITLE/);
+  assert.match(userPrompt, /UNIQUE_ASSIGNED_PLAN_DESCRIPTION/);
+  assert.match(userPrompt, /UNIQUE_ASSIGNED_PLAN_STEP/);
+  assert.match(userPrompt, /UNIQUE_ASSIGNED_EXPECTED_RESULT/);
+});
+
+test("generateSingleScript retries once when Ollama returns only imports", async () => {
+  const validScript = `import { test, expect } from '@playwright/test';\n\n` +
+    `test('example', async ({ page }) => {\n` +
+    `  await page.goto('https://example.com');\n` +
+    `  await expect(page).toHaveTitle(/.+/);\n` +
+    `});\n`;
+  const responses = [
+    { id: "TC-001", title: "Page loads", script: "import { test, expect } from '@playwright/test';\n\n" },
+    { id: "TC-001", title: "Page loads", script: validScript },
+  ];
+  const prompts: string[] = [];
+  const ollamaClient = {
+    chat: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      prompts.push(request.messages.find((message) => message.role === "user")?.content ?? "");
+      return { message: { content: JSON.stringify(responses.shift()) } };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  const generated = await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "Page loads",
+    description: "Verify the page loads",
+    type: "UI",
+    testSteps: ["Open the page"],
+    expectedResult: "The page is visible",
+  }, {
+    ollamaClient,
+    mcpClient: mockMcpClient(),
+  });
+
+  assert.equal(generated.script, validScript);
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /RETRY REQUIRED/);
+  assert.match(prompts[1], /failed validation/i);
+});
+
+test("generateSingleScript retries token repetition with concise feedback", async () => {
+  const validScript = `import { test, expect } from '@playwright/test';\n\n` +
+    `test('example', async ({ page }) => {\n` +
+    `  await page.goto('https://example.com');\n` +
+    `  await expect(page).toHaveTitle(/.+/);\n` +
+    `});\n`;
+  const prompts: string[] = [];
+  let callCount = 0;
+  const ollamaClient = {
+    chat: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      callCount += 1;
+      prompts.push(request.messages.find((message) => message.role === "user")?.content ?? "");
+      if (callCount === 1) throw new Error("prediction aborted, token repeat limit reached");
+      return { message: { content: JSON.stringify({ id: "TC-001", title: "Page loads", script: validScript }) } };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  const generated = await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "Page loads",
+    description: "Verify the page loads",
+    type: "UI",
+    testSteps: ["Open the page"],
+    expectedResult: "The page is visible",
+  }, {
+    ollamaClient,
+    mcpClient: mockMcpClient(),
+  });
+
+  assert.equal(generated.script, validScript);
+  assert.equal(callCount, 2);
+  assert.match(prompts[1], /model repeated tokens/i);
+});
+
 test("generateTestPlans rejects malformed Ollama JSON", async () => {
   await assert.rejects(
     generateTestPlans(generationPayload, {
@@ -227,4 +340,215 @@ test("generateTestPlans rejects malformed Ollama JSON", async () => {
     }),
     /not a valid JSON payload/i,
   );
+});
+
+test("generateNextTestPlan returns one bounded case without opening MCP tools", async () => {
+  let request: {
+    messages: Array<{ role: string; content: string }>;
+    options?: Record<string, number>;
+  } | undefined;
+  const plan = {
+    status: "case",
+    id: "model-id",
+    title: "Required field validation",
+    description: "Verify the required field blocks submission when empty",
+    type: "UI",
+    testSteps: ["Leave the required field empty", "Submit the form"],
+    expectedResult: "Validation feedback is shown",
+  };
+  const ollamaClient = {
+    chat: async (chatRequest: { messages: Array<{ role: string; content: string }> }) => {
+      request = chatRequest;
+      return { message: { content: JSON.stringify(plan) } };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  const result = await generateNextTestPlan(
+    generationPayload,
+    "Discovered snapshot for the checkout form",
+    [],
+    { ollamaClient, maxPromptChars: 14000 },
+  );
+
+  assert.equal(result.status, "case");
+  if (result.status !== "case") return;
+  assert.equal(result.plan.title, plan.title);
+  assert.equal(request?.options?.num_ctx, 8192);
+  assert.equal(request?.options?.num_predict, 4096);
+  assert.equal(request?.options?.repeat_penalty, 1.15);
+  const userPrompt = request?.messages.find((message) => message.role === "user")?.content ?? "";
+  assert.ok(userPrompt.length <= 14000);
+  assert.match(userPrompt, /Discovered snapshot for the checkout form/);
+  assert.match(userPrompt, /one distinct scenario/i);
+});
+
+test("generateNextTestPlan returns done when a page has no uncovered cases", async () => {
+  const ollamaClient = mockOllamaClient([{
+    content: JSON.stringify({
+      status: "done",
+      id: "",
+      title: "",
+      description: "",
+      type: "UI",
+      testSteps: [],
+      expectedResult: "",
+    }),
+  }]);
+
+  const result = await generateNextTestPlan(
+    generationPayload,
+    "Static informational page",
+    [{ title: "Page loads", description: "Verify the heading is visible" }],
+    { ollamaClient },
+  );
+
+  assert.deepEqual(result, { status: "done" });
+});
+
+test("generateNextTestPlan enforces a small configured prompt budget", async () => {
+  let userPrompt = "";
+  const ollamaClient = {
+    chat: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      userPrompt = request.messages.find((message) => message.role === "user")?.content ?? "";
+      return {
+        message: {
+          content: JSON.stringify({
+            status: "done",
+            id: "",
+            title: "",
+            description: "",
+            type: "UI",
+            testSteps: [],
+            expectedResult: "",
+          }),
+        },
+      };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  await generateNextTestPlan(
+    { ...generationPayload, specification: "Requirement ".repeat(1000) },
+    "Snapshot ".repeat(1000),
+    [],
+    { ollamaClient, maxPromptChars: 1200 },
+  );
+
+  assert.ok(userPrompt.length <= 1200);
+  assert.ok(userPrompt.length < "Snapshot ".repeat(1000).length);
+});
+
+test("generateNextTestPlan keeps the most recently covered cases within its prompt budget", async () => {
+  let userPrompt = "";
+  const ollamaClient = {
+    chat: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      userPrompt = request.messages.find((message) => message.role === "user")?.content ?? "";
+      return {
+        message: {
+          content: JSON.stringify({
+            status: "done",
+            id: "",
+            title: "",
+            description: "",
+            type: "UI",
+            testSteps: [],
+            expectedResult: "",
+          }),
+        },
+      };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  await generateNextTestPlan(
+    generationPayload,
+    "Page snapshot",
+    Array.from({ length: 100 }, (_, index) => ({
+      title: `Covered case ${index + 1}`,
+      description: `Description ${index + 1}`,
+    })),
+    { ollamaClient, maxPromptChars: 1200 },
+  );
+
+  assert.ok(userPrompt.length <= 1200);
+  assert.match(userPrompt, /Covered case 100/);
+  assert.doesNotMatch(userPrompt, /Covered case 1:/);
+});
+
+test("processSnapshotTestPlans persists each case before requesting the next and has no small fixed cap", async () => {
+  const events: string[] = [];
+  const cases = Array.from({ length: 12 }, (_, index) => ({
+    status: "case",
+    id: `model-${index + 1}`,
+    title: `Distinct behavior ${index + 1}`,
+    description: `Verify behavior ${index + 1}`,
+    type: "UI",
+    testSteps: [`Exercise behavior ${index + 1}`],
+    expectedResult: `Behavior ${index + 1} is correct`,
+  }));
+  const ollamaClient = {
+    chat: async () => {
+      const next = cases.shift();
+      events.push(next ? `model:${next.title}` : "model:done");
+      return {
+        message: {
+          content: JSON.stringify(next ?? {
+            status: "done",
+            id: "",
+            title: "",
+            description: "",
+            type: "UI",
+            testSteps: [],
+            expectedResult: "",
+          }),
+        },
+      };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  const result = await processSnapshotTestPlans(
+    generationPayload,
+    "Large page snapshot",
+    { ollamaClient },
+    async (plan) => {
+      events.push(`persist:${plan.title}`);
+      return true;
+    },
+  );
+
+  assert.deepEqual(result, { status: "complete", planCount: 12 });
+  assert.equal(events.filter((event) => event.startsWith("persist:")).length, 12);
+  for (let index = 0; index < 12; index += 1) {
+    assert.match(events[index * 2], /^model:Distinct behavior/);
+    assert.match(events[index * 2 + 1], /^persist:Distinct behavior/);
+  }
+  assert.equal(events.at(-1), "model:done");
+});
+
+test("processSnapshotTestPlans reports incomplete when planning stalls on duplicates", async () => {
+  const duplicate = {
+    status: "case",
+    id: "duplicate-id",
+    title: "Same scenario",
+    description: "Repeat the same behavior",
+    type: "UI",
+    testSteps: ["Repeat the same behavior"],
+    expectedResult: "The same result",
+  };
+  const ollamaClient = mockOllamaClient(
+    Array.from({ length: 6 }, () => ({ content: JSON.stringify(duplicate) })),
+  );
+  let persistedCount = 0;
+
+  const result = await processSnapshotTestPlans(
+    generationPayload,
+    "Page snapshot",
+    { ollamaClient },
+    async () => {
+      persistedCount += 1;
+      return true;
+    },
+  );
+
+  assert.equal(result.status, "incomplete");
+  assert.equal(result.planCount, 1);
+  assert.equal(persistedCount, 1);
 });

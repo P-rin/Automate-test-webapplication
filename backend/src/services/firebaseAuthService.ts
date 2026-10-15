@@ -18,7 +18,12 @@ export const createRequireFirebaseAuth = (
   }
 
   try {
-    await verifyToken(token);
+    const decodedToken = await verifyToken(token);
+    if (typeof decodedToken !== "object" || decodedToken == null || typeof (decodedToken as { uid?: unknown }).uid !== "string") {
+      res.status(401).json({ error: "Invalid or expired Firebase ID token" });
+      return;
+    }
+    res.locals.firebaseUser = decodedToken;
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired Firebase ID token" });

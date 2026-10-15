@@ -73,6 +73,7 @@ export interface LlmGenerationOptions {
   ollamaHost?: string;
   ollamaModel?: string;
   maxPromptChars?: number;
+  usePlaywrightTools?: boolean;
   ollamaClient?: Pick<Ollama, "chat">;
   mcpClient?: Pick<Client, "listTools" | "callTool">;
   debugContext?: {
@@ -339,6 +340,7 @@ export const buildAgentGenerationPrompt = (payload: CopilotRequest, plannedCase:
     `Steps: ${plannedCase.testSteps.join(" | ")}`,
     "Return a JSON object with fields id, title, and script.",
     "The script must import test and expect from '@playwright/test' and contain at least one Playwright test block.",
+    "Never return only imports, a description, or an empty test body. Include at least one meaningful expect assertion before ending the script.",
   ].join("\n");
 
   return truncateText(task, 14000, "agent generation prompt");
@@ -446,9 +448,23 @@ const GENERATED_SCRIPT_RESPONSE_FORMAT = {
   properties: {
     id: { type: "string" },
     title: { type: "string" },
-    script: { type: "string" },
+    script: { type: "string", minLength: 100 },
   },
   required: ["id", "title", "script"],
+  additionalProperties: false,
+};
+const NEXT_TEST_PLAN_RESPONSE_FORMAT = {
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["case", "done"] },
+    id: { type: "string" },
+    title: { type: "string" },
+    description: { type: "string" },
+    type: { type: "string", enum: ["UI", "API"] },
+    testSteps: { type: "array", items: { type: "string" } },
+    expectedResult: { type: "string" },
+  },
+  required: ["status", "id", "title", "description", "type", "testSteps", "expectedResult"],
   additionalProperties: false,
 };
 
@@ -469,7 +485,8 @@ const callOllamaModel = async (
   responseFormat: object,
   options: LlmGenerationOptions,
 ): Promise<string> => {
-  const transport = options.mcpClient
+  const toolsEnabled = options.usePlaywrightTools !== false;
+  const transport = options.mcpClient || !toolsEnabled
     ? undefined
     : new StdioClientTransport(resolvePlaywrightMcpLaunchConfig());
   const ownedMcpClient = new Client({ name: "ollama-playwright-client", version: "1.0.0" });
@@ -481,11 +498,11 @@ const callOllamaModel = async (
 
   try {
     if (transport) await ownedMcpClient.connect(transport);
-    const availableTools = await mcpClient.listTools();
+    const availableTools = toolsEnabled ? await mcpClient.listTools() : { tools: [] };
     const tools = availableTools.tools
       .filter((tool) => ALLOWED_PLAYWRIGHT_TOOLS.has(tool.name))
       .map(toOllamaTool);
-    if (tools.length === 0) {
+    if (toolsEnabled && tools.length === 0) {
       throw new Error("Playwright MCP did not expose any allowed browser tools");
     }
 
@@ -498,7 +515,12 @@ const callOllamaModel = async (
           messages,
           tools,
           format: responseFormat,
-          options: { temperature: 0.1 },
+          options: {
+            temperature: 0.1,
+            repeat_penalty: 1.15,
+            num_ctx: 8192,
+            num_predict: 4096,
+          },
         });
       } catch (error) {
         if (options.debugContext) {
@@ -582,6 +604,122 @@ export const generateTestPlans = async (
   return plannedCases;
 };
 
+export type NextTestPlanResult = { status: "case"; plan: TestPlan } | { status: "done" };
+
+export const generateNextTestPlan = async (
+  payload: CopilotRequest,
+  snapshot: string,
+  existingCases: Pick<TestPlan, "title" | "description">[],
+  options: LlmGenerationOptions = {},
+): Promise<NextTestPlanResult> => {
+  const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
+  const instructions = [
+    "You are a QA planner creating one independent test case at a time for the current discovered page/state.",
+    "Use only concrete behaviors supported by the requirement and accessibility snapshot.",
+    "Return status=case with exactly one distinct scenario that is not already covered, or status=done only when no additional meaningful scenario remains for this page/state.",
+    "Do not combine positive and negative scenarios. Avoid speculative, redundant, or low-value cases.",
+    "If authentication is required, include login as the initial test steps.",
+    "For status=done, return empty strings for text fields, type=UI, and an empty testSteps array.",
+    "Return only the JSON object required by the schema.",
+  ].join("\n");
+  const contextBudget = Math.max(0, maxPromptChars - instructions.length - 256);
+  const specification = payload.specification.trim() || "No requirement specification was provided.";
+  const maxKnownCasesChars = Math.floor(contextBudget * 0.35);
+  const knownCaseLines = existingCases.map((item) => `${item.title}: ${item.description}`);
+  const recentKnownCases: string[] = [];
+  let recentKnownCasesLength = 0;
+  for (const line of knownCaseLines.reverse()) {
+    const separatorLength = recentKnownCases.length > 0 ? 1 : 0;
+    const remainingLength = maxKnownCasesChars - recentKnownCasesLength - separatorLength;
+    if (remainingLength <= 0) break;
+    const recentLine = line.slice(0, remainingLength);
+    recentKnownCases.push(recentLine);
+    recentKnownCasesLength += recentLine.length + separatorLength;
+    if (recentLine.length < line.length) break;
+  }
+  const knownCases = recentKnownCases.reverse().join("\n");
+  const prompt = [
+    instructions,
+    `Target URL: ${payload.targetUrl}`,
+    "[Requirement Specification]",
+    truncateText(specification, Math.floor(contextBudget * 0.2), "[Requirement Specification]"),
+    "[Discovered Page Snapshot]",
+    truncateText(snapshot, Math.floor(contextBudget * 0.45), "[Discovered Page Snapshot]"),
+    "[Already Covered Cases]",
+    knownCases || "None",
+  ].join("\n");
+  const runPromptSafely = createRunContext({ ...options, usePlaywrightTools: false });
+  const raw = await runPromptSafely(
+    prompt.length > maxPromptChars ? prompt.slice(0, maxPromptChars) : prompt,
+    "Plan one distinct test case at a time from the supplied page snapshot, or report that this page has no more meaningful uncovered cases.",
+    NEXT_TEST_PLAN_RESPONSE_FORMAT,
+  );
+  const response = toJsonObject<TestPlan & { status: "case" | "done" }>(raw);
+
+  if (response.status === "done") return { status: "done" };
+  if (response.status !== "case" || !isValidTestPlan(response)) {
+    throw new Error("Planner response did not contain a valid next test case");
+  }
+
+  return { status: "case", plan: response };
+};
+
+export type IncrementalPlanningResult =
+  | { status: "complete"; planCount: number }
+  | { status: "incomplete"; planCount: number; stopReason: string };
+
+const normalizePlanTitle = (title: string): string => title.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+
+export const processSnapshotTestPlans = async (
+  payload: CopilotRequest,
+  snapshot: string,
+  options: LlmGenerationOptions,
+  persistCase: (plan: TestPlan, sequence: number) => Promise<boolean>,
+): Promise<IncrementalPlanningResult> => {
+  const knownCases: Pick<TestPlan, "title" | "description">[] = [];
+  const knownTitles = new Set<string>();
+  let planCount = 0;
+  let repeatedCaseCount = 0;
+  const maxRepeatedCases = 5;
+
+  while (true) {
+    const next = await generateNextTestPlan(payload, snapshot, knownCases, options);
+    if (next.status === "done") return { status: "complete", planCount };
+
+    const titleKey = normalizePlanTitle(next.plan.title);
+    if (!titleKey || knownTitles.has(titleKey)) {
+      repeatedCaseCount += 1;
+      knownCases.push({ title: next.plan.title, description: next.plan.description });
+      if (repeatedCaseCount >= maxRepeatedCases) {
+        return {
+          status: "incomplete",
+          planCount,
+          stopReason: "Planner repeated already-covered cases and could not make coverage progress",
+        };
+      }
+      continue;
+    }
+
+    const accepted = await persistCase(next.plan, planCount + 1);
+    knownCases.push({ title: next.plan.title, description: next.plan.description });
+    if (!accepted) {
+      repeatedCaseCount += 1;
+      if (repeatedCaseCount >= maxRepeatedCases) {
+        return {
+          status: "incomplete",
+          planCount,
+          stopReason: "Planner repeated already-covered cases and could not make coverage progress",
+        };
+      }
+      continue;
+    }
+
+    knownTitles.add(titleKey);
+    planCount += 1;
+    repeatedCaseCount = 0;
+  }
+};
+
 export const generateSingleScript = async (
   payload: CopilotRequest,
   plannedCase: TestPlan,
@@ -595,30 +733,52 @@ export const generateSingleScript = async (
   let normalizationApplied = false;
 
   try {
-    const generatorRaw = await runPromptSafely(
-      buildAgentGenerationPrompt(payload, plannedCase),
-      "You are an autonomous QA agent. Use Playwright MCP browser tools to inspect and validate the flow, then return only JSON with id, title, and script.",
-      GENERATED_SCRIPT_RESPONSE_FORMAT,
-    );
-    const generated = toJsonObject<GeneratorResponse>(generatorRaw);
+    const basePrompt = buildGeneratorPrompt(payload, plannedCase, maxPromptChars);
+    let retryFeedback = "";
 
-    if (!generated.id || !generated.title || !generated.script) {
-      throw new Error("Generator response missing required fields");
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const prompt = retryFeedback
+          ? `${basePrompt}\n\n[RETRY REQUIRED]\n${retryFeedback}\nReturn a complete Playwright test file; do not repeat the invalid script.`
+          : basePrompt;
+        const generatorRaw = await runPromptSafely(
+          prompt,
+          "You are an autonomous QA agent. Use Playwright MCP browser tools to inspect and validate the flow, then return only JSON with id, title, and script. The script must contain a complete test block and a meaningful assertion.",
+          GENERATED_SCRIPT_RESPONSE_FORMAT,
+        );
+        const generated = toJsonObject<GeneratorResponse>(generatorRaw);
+
+        if (!generated.id || !generated.title || !generated.script) {
+          throw new Error("Generator response missing required fields");
+        }
+
+        const executableScript = normalizeGeneratedScript(generated.script);
+        normalizationApplied = executableScript !== generated.script;
+
+        scriptShape = summarizeScriptShape(executableScript);
+        scriptPreview = buildScriptPreview(executableScript);
+
+        validateGeneratedScript(executableScript);
+
+        return {
+          id: generated.id,
+          title: generated.title,
+          script: executableScript,
+        };
+      } catch (error) {
+        const isRetryableOutputError = error instanceof Error && (
+          error.message.startsWith("Generated script")
+          || error.message === "Generator response missing required fields"
+        );
+        const isTokenRepeatError = error instanceof Error && /token repeat limit reached/i.test(error.message);
+        if ((!isRetryableOutputError && !isTokenRepeatError) || attempt === 2) throw error;
+        retryFeedback = isTokenRepeatError
+          ? "The previous generation stopped because the model repeated tokens. Produce a shorter, direct Playwright script with minimal code and no repeated steps."
+          : `The previous script failed validation: ${error instanceof Error ? error.message : String(error)}. It must import test and expect, contain one test(...) block, and include a meaningful expect assertion.`;
+      }
     }
 
-    const executableScript = normalizeGeneratedScript(generated.script);
-    normalizationApplied = executableScript !== generated.script;
-
-    scriptShape = summarizeScriptShape(executableScript);
-    scriptPreview = buildScriptPreview(executableScript);
-
-    validateGeneratedScript(executableScript);
-
-    return {
-      id: generated.id,
-      title: generated.title,
-      script: executableScript,
-    };
+    throw new Error("Script generation did not produce a valid result");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const debugMeta = {

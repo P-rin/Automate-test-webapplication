@@ -124,6 +124,20 @@ const getRequestSummary = (input: RequestInfo | URL, init?: RequestInit): Record
   };
 };
 
+const getModelMetrics = (responseBody: string): Record<string, number> | undefined => {
+  try {
+    const response = JSON.parse(responseBody) as Record<string, unknown>;
+    const metrics: Record<string, number> = {};
+    for (const key of ["total_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration"]) {
+      const value = response[key];
+      if (typeof value === "number" && Number.isFinite(value)) metrics[key] = value;
+    }
+    return Object.keys(metrics).length > 0 ? metrics : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const createOllamaDebugFetch = (
   context: OllamaDebugContext,
   fetchImplementation: typeof fetch = fetch,
@@ -164,6 +178,7 @@ export const createOllamaDebugFetch = (
         bodyCaptureError = serializeOllamaDebugError(error);
       }
 
+      const modelMetrics = getModelMetrics(responseBody);
       await writeSafely({
         event: "response",
         requestId,
@@ -175,6 +190,7 @@ export const createOllamaDebugFetch = (
         responseBody: responseBody.slice(0, MAX_RESPONSE_BODY_CHARS),
         responseBodyChars: responseBody.length,
         responseBodyTruncated: responseBody.length > MAX_RESPONSE_BODY_CHARS,
+        ...(modelMetrics ? { modelMetrics } : {}),
         ...(bodyCaptureError ? { bodyCaptureError } : {}),
       });
 
