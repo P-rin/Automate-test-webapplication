@@ -13,7 +13,17 @@ import {
 } from "../services/githubAuthService.js";
 import { generateTestsTwoPass } from "../services/ollamaService.js";
 import { requireFirebaseAuth } from "../services/firebaseAuthService.js";
-import { createGenerationJob, getGenerationJob, listGenerationJobCases, processGenerateJob } from "../services/generationJobService.js";
+import {
+  createGenerationJob,
+  GenerationRetryError,
+  getGenerationJob,
+  listFailedGenerationCases,
+  listGenerationJobs,
+  listGenerationJobCases,
+  processGenerateJob,
+  retryFailedGenerationCase,
+  startGenerationJobScriptGeneration,
+} from "../services/generationJobService.js";
 import { getTestRun, startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
 import { readSpecFiles } from "../services/specReader.js";
@@ -38,6 +48,13 @@ const executeSchema = z.object({
 const executeV2Schema = z.object({
   testCaseIds: z.array(z.string().min(1)).min(1),
   engine: z.enum(["playwright", "mcp"]).optional(),
+});
+
+const generateJobScriptsSchema = z.object({
+  caseIds: z.array(z.string().min(1)).min(1).optional().refine(
+    (caseIds) => !caseIds || new Set(caseIds).size === caseIds.length,
+    "caseIds must not contain duplicates",
+  ),
 });
 
 const updateScriptSchema = z.object({
@@ -209,6 +226,48 @@ apiRouter.get("/generation-jobs/:jobId", requireFirebaseAuth, async (req, res) =
   }
 });
 
+apiRouter.get("/v2/generation-failures", requireFirebaseAuth, async (_req, res) => {
+  try {
+    const cases = await listFailedGenerationCases(getFirebaseUid(res));
+    return res.json({ cases });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(500).json({ error: message });
+  }
+});
+
+apiRouter.get("/v2/generation-jobs", requireFirebaseAuth, async (_req, res) => {
+  try {
+    const jobs = await listGenerationJobs(getFirebaseUid(res));
+    return res.json({ jobs });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(500).json({ error: message });
+  }
+});
+
+apiRouter.post("/v2/generation-jobs/:jobId/cases/:caseId/retry", requireFirebaseAuth, async (req, res) => {
+  try {
+    const result = await retryFailedGenerationCase(
+      req.params.jobId,
+      req.params.caseId,
+      getFirebaseUid(res),
+      {
+        ollamaHost: env.ollamaBaseUrl,
+        ollamaModel: env.ollamaModel,
+        maxPromptChars: env.llmMaxPromptChars,
+      },
+    );
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof GenerationRetryError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(500).json({ error: message });
+  }
+});
+
 apiRouter.get("/v2/generation-jobs/:jobId", requireFirebaseAuth, async (req, res) => {
   try {
     const job = await getGenerationJob(req.params.jobId, getFirebaseUid(res));
@@ -236,6 +295,13 @@ apiRouter.get("/v2/generation-jobs/:jobId", requireFirebaseAuth, async (req, res
       processedSnapshotCount: job.processedSnapshotCount,
       coverageComplete: job.coverageComplete,
       coverageStopReason: job.coverageStopReason,
+      scriptGenerationStatus: job.scriptGenerationStatus,
+      scriptGenerationTargetCount: job.scriptGenerationTargetCount,
+      scriptGenerationCompletedCount: job.scriptGenerationCompletedCount,
+      scriptGenerationCurrentCaseId: job.scriptGenerationCurrentCaseId,
+      scriptGenerationCurrentTitle: job.scriptGenerationCurrentTitle,
+      scriptGenerationMessage: job.scriptGenerationMessage,
+      scriptGenerationError: job.scriptGenerationError,
       primaryGeneratedTest: primaryCase
         ? { id: primaryCase.id, title: String(primaryMeta?.title ?? ""), script: primaryCase.script }
         : undefined,
@@ -249,6 +315,32 @@ apiRouter.get("/v2/generation-jobs/:jobId", requireFirebaseAuth, async (req, res
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return res.status(404).json({ error: message });
+  }
+});
+
+apiRouter.post("/v2/generation-jobs/:jobId/generate-scripts", requireFirebaseAuth, async (req, res) => {
+  try {
+    const payload = generateJobScriptsSchema.parse(req.body ?? {});
+    const result = await startGenerationJobScriptGeneration(
+      req.params.jobId,
+      getFirebaseUid(res),
+      payload.caseIds,
+      {
+        ollamaHost: env.ollamaBaseUrl,
+        ollamaModel: env.ollamaModel,
+        maxPromptChars: env.llmMaxPromptChars,
+      },
+    );
+    return res.status(202).json({ status: "accepted", ...result });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
+    }
+    if (error instanceof GenerationRetryError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(500).json({ error: message });
   }
 });
 

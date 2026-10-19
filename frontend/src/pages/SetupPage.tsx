@@ -62,8 +62,6 @@ export default function SetupPage() {
   const [jobError, setJobError] = useState('');
   const [jobStage, setJobStage] = useState('');
   const [jobCaseCount, setJobCaseCount] = useState(0);
-  const [jobCompletedCaseCount, setJobCompletedCaseCount] = useState(0);
-  const [jobFailedCaseCount, setJobFailedCaseCount] = useState(0);
   const [jobSnapshotCount, setJobSnapshotCount] = useState(0);
   const [jobProcessedSnapshotCount, setJobProcessedSnapshotCount] = useState(0);
   const [coverageComplete, setCoverageComplete] = useState(false);
@@ -144,8 +142,6 @@ export default function SetupPage() {
     setJobError('');
     setJobStage('');
     setJobCaseCount(0);
-    setJobCompletedCaseCount(0);
-    setJobFailedCaseCount(0);
     setJobSnapshotCount(0);
     setJobProcessedSnapshotCount(0);
     setCoverageComplete(false);
@@ -223,8 +219,6 @@ export default function SetupPage() {
         setJobMessage(data.message ?? '');
         setJobError(data.errorMessage ?? '');
         setJobCaseCount(data.caseCount ?? 0);
-        setJobCompletedCaseCount(data.completedCaseCount ?? 0);
-        setJobFailedCaseCount(data.failedCaseCount ?? 0);
         setJobSnapshotCount(data.snapshotCount ?? 0);
         setJobProcessedSnapshotCount(data.processedSnapshotCount ?? 0);
         setCoverageComplete(data.coverageComplete ?? false);
@@ -310,7 +304,7 @@ export default function SetupPage() {
     { key: 'connecting', label: 'Connecting to Target Website' },
         { key: 'reading', label: 'Reading Context Specification File(s) (Optional)' },
     { key: 'fetching', label: 'Fetching Accessibility Snapshot via MCP' },
-    { key: 'writing', label: 'Writing Playwright Scripts & Criteria with Ollama' },
+    { key: 'writing', label: 'Planning Test Cases from Snapshots' },
   ];
 
   const stepIcon = (status: string) => {
@@ -419,7 +413,8 @@ export default function SetupPage() {
             <p><span className="font-medium">สถานะ:</span> {jobStatus || 'pending'}</p>
             <p><span className="font-medium">ขั้นตอน:</span> {jobStage || 'กำลังรอการประมวลผล'}</p>
             <p><span className="font-medium">ความคืบหน้า:</span> {jobPercentage}%</p>
-            <p><span className="font-medium">เคส:</span> {jobCompletedCaseCount} บันทึกแล้ว / {jobCaseCount} วางแผนแล้ว / {jobFailedCaseCount} ล้มเหลว</p>
+            <p><span className="font-medium">Test case:</span> {jobCaseCount} วางแผนแล้ว</p>
+            <p><span className="font-medium">Test Script:</span> สร้างแยกภายหลังจากหน้าคลังชุดทดสอบ</p>
             <p><span className="font-medium">หน้า/สถานะที่สำรวจ:</span> {jobProcessedSnapshotCount}/{jobSnapshotCount}</p>
             <p><span className="font-medium">ข้อความ:</span> {jobMessage || 'กำลังรอการประมวลผล'}</p>
             {jobError && <p className="text-red-600"><span className="font-medium">ข้อผิดพลาด:</span> {jobError}</p>}
@@ -433,14 +428,23 @@ export default function SetupPage() {
           <div className="w-full bg-gray-100 rounded-full h-2 mt-3 overflow-hidden">
             <div className="h-2 bg-blue-600" style={{ width: `${Math.min(jobPercentage, 100)}%` }} />
           </div>
+          {['completed', 'incomplete'].includes(jobStatus) && (
+            <button
+              type="button"
+              onClick={() => navigate(`/test-cases?jobId=${encodeURIComponent(jobId)}`)}
+              className="mt-4 rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-800"
+            >
+              ตรวจ Test case และเลือกสร้าง Script
+            </button>
+          )}
           {jobCases.length > 0 && (
             <ol className="mt-4 divide-y divide-gray-100 border-t border-gray-100">
               {jobCases.map((testCase) => (
                 <li key={testCase.id} className="py-3 text-sm">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                     <span className="font-medium text-gray-800">{testCase.sequence}. {testCase.title}</span>
-                    <span className={testCase.status === 'failed' ? 'text-red-600' : testCase.status === 'saved' ? 'text-green-700' : 'text-blue-700'}>
-                      {testCase.status}
+                    <span className={testCase.status === 'failed' ? 'text-red-600' : testCase.status === 'saved' ? 'text-green-700' : testCase.status === 'generating' ? 'text-blue-700' : 'text-gray-600'}>
+                      {testCase.status === 'saved' ? 'สร้างแล้ว' : testCase.status === 'failed' ? 'สร้างไม่สำเร็จ' : testCase.status === 'generating' ? 'กำลังสร้าง' : 'รอสร้าง'}
                     </span>
                   </div>
                   <p className="mt-1 text-xs text-gray-500">{testCase.page}</p>

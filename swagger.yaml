@@ -183,6 +183,28 @@ paths:
                 $ref: '#/components/schemas/GenerationJob'
         '404':
           description: Job not found
+  /api/v2/generation-jobs:
+    get:
+      summary: List the authenticated user's generation jobs
+      operationId: listGenerationJobs
+      security:
+        - firebaseBearerAuth: []
+      responses:
+        '200':
+          description: Generation jobs for the authenticated user
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - jobs
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GenerationJobSummary'
+        '401':
+          description: Firebase ID token missing, invalid, or expired
   /api/v2/generation-jobs/{jobId}:
     get:
       summary: Get generation job status (v2)
@@ -202,6 +224,150 @@ paths:
                 $ref: '#/components/schemas/GenerationJobV2'
         '404':
           description: Job not found
+  /api/v2/generation-failures:
+    get:
+      summary: List the authenticated user's failed Test Script generations
+      operationId: listFailedGenerationCases
+      security:
+        - firebaseBearerAuth: []
+      responses:
+        '200':
+          description: Failed generation cases available to retry
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - cases
+                properties:
+                  cases:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - jobId
+                        - caseId
+                        - projectId
+                        - projectName
+                        - title
+                        - page
+                        - type
+                        - errorMessage
+                        - retryStatus
+                      properties:
+                        jobId:
+                          type: string
+                        caseId:
+                          type: string
+                        projectId:
+                          type: string
+                        projectName:
+                          type: string
+                        title:
+                          type: string
+                        page:
+                          type: string
+                        type:
+                          type: string
+                          enum: [UI, API]
+                        errorMessage:
+                          type: string
+                        retryErrorMessage:
+                          type: string
+                        retryStatus:
+                          type: string
+                          enum: [idle, running, failed]
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+  /api/v2/generation-jobs/{jobId}/cases/{caseId}/retry:
+    post:
+      summary: Retry a failed Test Script generation case
+      operationId: retryFailedGenerationCase
+      security:
+        - firebaseBearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test Script generated and saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - testCaseId
+                  - title
+                properties:
+                  testCaseId:
+                    type: string
+                  title:
+                    type: string
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+        '404':
+          description: Generation case not found
+        '409':
+          description: Job is not terminal, case is not failed, or retry is already active
+        '500':
+          description: Snapshot discovery or Test Script generation failed
+  /api/v2/generation-jobs/{jobId}/generate-scripts:
+    post:
+      summary: Generate scripts for selected or all eligible cases in a Job
+      operationId: generateGenerationJobScripts
+      security:
+        - firebaseBearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                caseIds:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+      responses:
+        '202':
+          description: Script generation accepted and running in the background
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - acceptedCaseCount
+                properties:
+                  status:
+                    type: string
+                    enum: [accepted]
+                  acceptedCaseCount:
+                    type: integer
+        '400':
+          description: Invalid payload
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+        '404':
+          description: Generation job or case not found
+        '409':
+          description: Planning is incomplete, cases are not eligible, or generation is already running
   /api/save-test:
     post:
       summary: Save a generated test case
@@ -464,6 +630,106 @@ components:
       type: object
       allOf:
         - $ref: '#/components/schemas/GenerationJob'
+        - type: object
+          properties:
+            cases:
+              type: array
+              items:
+                $ref: '#/components/schemas/GenerationJobCase'
+            scriptGenerationStatus:
+              type: string
+              enum: [running, completed, failed]
+            scriptGenerationTargetCount:
+              type: integer
+            scriptGenerationCompletedCount:
+              type: integer
+            scriptGenerationCurrentCaseId:
+              type: string
+            scriptGenerationCurrentTitle:
+              type: string
+            scriptGenerationMessage:
+              type: string
+            scriptGenerationError:
+              type: string
+    GenerationJobSummary:
+      type: object
+      required:
+        - id
+        - projectId
+        - projectName
+        - targetUrl
+        - status
+        - caseCount
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        projectName:
+          type: string
+        targetUrl:
+          type: string
+          format: uri
+        status:
+          type: string
+        caseCount:
+          type: integer
+        scriptGenerationStatus:
+          type: string
+        scriptGenerationTargetCount:
+          type: integer
+        scriptGenerationCompletedCount:
+          type: integer
+        scriptGenerationCurrentTitle:
+          type: string
+        scriptGenerationMessage:
+          type: string
+        scriptGenerationError:
+          type: string
+    GenerationJobCase:
+      type: object
+      required:
+        - id
+        - sequence
+        - title
+        - description
+        - type
+        - testSteps
+        - expectedResult
+        - page
+        - status
+      properties:
+        id:
+          type: string
+        sequence:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+          enum: [UI, API]
+        testSteps:
+          type: array
+          items:
+            type: string
+        expectedResult:
+          type: string
+        page:
+          type: string
+        snapshotId:
+          type: string
+        status:
+          type: string
+          enum: [planned, generating, saved, failed]
+        retryStatus:
+          type: string
+          enum: [idle, running, saved, failed]
+        testCaseId:
+          type: string
+        errorMessage:
+          type: string
     SaveTestRequest:
       type: object
       required:
