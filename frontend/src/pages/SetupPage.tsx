@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 interface StepState {
@@ -47,6 +47,7 @@ interface GenerationJobDoc {
 
 export default function SetupPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const [url, setUrl] = useState('https://example.com');
   const [requirementsText, setRequirementsText] = useState('');
@@ -55,13 +56,15 @@ export default function SetupPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [projectName, setProjectName] = useState('');
-  const [jobId, setJobId] = useState('');
+  const [jobId, setJobId] = useState(() => searchParams.get('jobId') ?? '');
   const [jobStatus, setJobStatus] = useState('');
   const [jobPercentage, setJobPercentage] = useState(0);
   const [jobMessage, setJobMessage] = useState('');
   const [jobError, setJobError] = useState('');
   const [jobStage, setJobStage] = useState('');
   const [jobCaseCount, setJobCaseCount] = useState(0);
+  const [jobCompletedCaseCount, setJobCompletedCaseCount] = useState(0);
+  const [jobFailedCaseCount, setJobFailedCaseCount] = useState(0);
   const [jobSnapshotCount, setJobSnapshotCount] = useState(0);
   const [jobProcessedSnapshotCount, setJobProcessedSnapshotCount] = useState(0);
   const [coverageComplete, setCoverageComplete] = useState(false);
@@ -136,12 +139,18 @@ export default function SetupPage() {
     setGeneratedCode('');
     setSaveStatus('');
     setJobId('');
+    setSearchParams(params => {
+      params.delete('jobId');
+      return params;
+    }, { replace: true });
     setJobStatus('');
     setJobPercentage(0);
     setJobMessage('');
     setJobError('');
     setJobStage('');
     setJobCaseCount(0);
+    setJobCompletedCaseCount(0);
+    setJobFailedCaseCount(0);
     setJobSnapshotCount(0);
     setJobProcessedSnapshotCount(0);
     setCoverageComplete(false);
@@ -177,6 +186,10 @@ export default function SetupPage() {
 
       const data = await res.json();
       setJobId(data.jobId);
+      setSearchParams(params => {
+        params.set('jobId', data.jobId);
+        return params;
+      }, { replace: true });
       setJobStatus(data.status ?? 'pending');
       setJobMessage('Job accepted and running in background');
 
@@ -219,6 +232,8 @@ export default function SetupPage() {
         setJobMessage(data.message ?? '');
         setJobError(data.errorMessage ?? '');
         setJobCaseCount(data.caseCount ?? 0);
+        setJobCompletedCaseCount(data.completedCaseCount ?? 0);
+        setJobFailedCaseCount(data.failedCaseCount ?? 0);
         setJobSnapshotCount(data.snapshotCount ?? 0);
         setJobProcessedSnapshotCount(data.processedSnapshotCount ?? 0);
         setCoverageComplete(data.coverageComplete ?? false);
@@ -314,6 +329,21 @@ export default function SetupPage() {
     return <span className="text-gray-300">○</span>;
   };
 
+  const jobStatusLabel: Record<string, string> = {
+    pending: 'รอเริ่มทำงาน',
+    running: 'กำลังประมวลผล',
+    completed: 'เสร็จสมบูรณ์',
+    incomplete: 'เสร็จบางส่วน',
+    failed: 'ทำงานไม่สำเร็จ',
+  };
+  const jobStatusClass = jobStatus === 'completed'
+    ? 'bg-green-100 text-green-800'
+    : jobStatus === 'incomplete'
+      ? 'bg-amber-100 text-amber-800'
+      : jobStatus === 'failed'
+        ? 'bg-red-100 text-red-800'
+        : 'bg-blue-100 text-blue-800';
+
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
       <h1 className="text-2xl font-bold text-gray-800">ตั้งค่าโปรเจคและสร้างชุดทดสอบ</h1>
@@ -406,39 +436,71 @@ export default function SetupPage() {
       </button>
 
       {jobId && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 mt-4">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">สถานะงานหลังบ้าน (Background Job)</h3>
-          <div className="text-sm text-gray-700 space-y-2">
-            <p><span className="font-medium">Job ID:</span> {jobId}</p>
-            <p><span className="font-medium">สถานะ:</span> {jobStatus || 'pending'}</p>
-            <p><span className="font-medium">ขั้นตอน:</span> {jobStage || 'กำลังรอการประมวลผล'}</p>
-            <p><span className="font-medium">ความคืบหน้า:</span> {jobPercentage}%</p>
-            <p><span className="font-medium">Test case:</span> {jobCaseCount} วางแผนแล้ว</p>
-            <p><span className="font-medium">Test Script:</span> สร้างแยกภายหลังจากหน้าคลังชุดทดสอบ</p>
-            <p><span className="font-medium">หน้า/สถานะที่สำรวจ:</span> {jobProcessedSnapshotCount}/{jobSnapshotCount}</p>
-            <p><span className="font-medium">ข้อความ:</span> {jobMessage || 'กำลังรอการประมวลผล'}</p>
-            {jobError && <p className="text-red-600"><span className="font-medium">ข้อผิดพลาด:</span> {jobError}</p>}
+        <section aria-live="polite" className="overflow-hidden rounded-xl border border-blue-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-blue-100 bg-blue-50/70 px-5 py-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">ติดตามการสร้างชุดทดสอบ</h2>
+              <p className="mt-1 break-all text-xs text-gray-500">Job ID: {jobId}</p>
+            </div>
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${jobStatusClass}`}>
+              {jobStatusLabel[jobStatus] ?? 'กำลังเชื่อมต่อสถานะ'}
+            </span>
+          </div>
+          <div className="space-y-4 p-5">
+            <div>
+              <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+                <span className="font-medium text-gray-700">{jobStage || 'กำลังรอการประมวลผล'}</span>
+                <span className="font-semibold tabular-nums text-blue-800">{Math.min(jobPercentage, 100)}%</span>
+              </div>
+              <div
+                className="h-2.5 overflow-hidden rounded-full bg-gray-100"
+                role="progressbar"
+                aria-label="ความคืบหน้าการสร้างชุดทดสอบ"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.min(jobPercentage, 100)}
+              >
+                <div className="h-full rounded-full bg-blue-600 transition-[width] duration-500" style={{ width: `${Math.min(jobPercentage, 100)}%` }} />
+              </div>
+              <p className="mt-2 text-sm text-gray-600">{jobMessage || 'กำลังรอการประมวลผล'}</p>
+            </div>
+            <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-gray-200 bg-gray-200 sm:grid-cols-4">
+              <div className="bg-white px-3 py-3">
+                <dt className="text-xs text-gray-500">Test case</dt>
+                <dd className="mt-1 text-lg font-semibold tabular-nums text-gray-900">{jobCaseCount}</dd>
+              </div>
+              <div className="bg-white px-3 py-3">
+                <dt className="text-xs text-gray-500">สำเร็จ</dt>
+                <dd className="mt-1 text-lg font-semibold tabular-nums text-green-700">{jobCompletedCaseCount}</dd>
+              </div>
+              <div className="bg-white px-3 py-3">
+                <dt className="text-xs text-gray-500">ไม่สำเร็จ</dt>
+                <dd className="mt-1 text-lg font-semibold tabular-nums text-red-700">{jobFailedCaseCount}</dd>
+              </div>
+              <div className="bg-white px-3 py-3">
+                <dt className="text-xs text-gray-500">หน้าที่สำรวจ</dt>
+                <dd className="mt-1 text-lg font-semibold tabular-nums text-gray-900">{jobProcessedSnapshotCount}/{jobSnapshotCount}</dd>
+              </div>
+            </dl>
+            {jobError && <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">ข้อผิดพลาด: {jobError}</p>}
             {jobStatus === 'incomplete' && (
-              <p className="text-amber-700"><span className="font-medium">Coverage ยังไม่ครบ:</span> {coverageStopReason || jobMessage}</p>
+              <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">Coverage ยังไม่ครบ: {coverageStopReason || jobMessage}</p>
             )}
             {coverageComplete && jobStatus !== 'running' && jobStatus !== 'incomplete' && (
-              <p className="text-green-700">ตรวจสอบ coverage ที่ค้นพบครบแล้ว</p>
+              <p className="text-sm text-green-700">ตรวจสอบ coverage ที่ค้นพบครบแล้ว</p>
             )}
           </div>
-          <div className="w-full bg-gray-100 rounded-full h-2 mt-3 overflow-hidden">
-            <div className="h-2 bg-blue-600" style={{ width: `${Math.min(jobPercentage, 100)}%` }} />
-          </div>
-          {['completed', 'incomplete'].includes(jobStatus) && (
+          {['completed', 'incomplete', 'failed'].includes(jobStatus) && (
             <button
               type="button"
               onClick={() => navigate(`/test-cases?jobId=${encodeURIComponent(jobId)}`)}
-              className="mt-4 rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-800"
+              className="mx-5 mb-5 rounded-md bg-blue-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-800"
             >
-              ตรวจ Test case และเลือกสร้าง Script
+              ดู Test case และสถานะทั้งหมด
             </button>
           )}
           {jobCases.length > 0 && (
-            <ol className="mt-4 divide-y divide-gray-100 border-t border-gray-100">
+            <ol className="divide-y divide-gray-100 border-t border-gray-100 px-5">
               {jobCases.map((testCase) => (
                 <li key={testCase.id} className="py-3 text-sm">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -453,7 +515,7 @@ export default function SetupPage() {
               ))}
             </ol>
           )}
-        </div>
+        </section>
       )}
 
       {/* Live Stepper */}

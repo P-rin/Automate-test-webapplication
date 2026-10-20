@@ -601,6 +601,8 @@ components:
           type: string
         errorMessage:
           type: string
+        retryErrorMessage:
+          type: string
           nullable: true
         generatedTestCaseIds:
           type: array

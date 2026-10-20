@@ -7,19 +7,6 @@ import { useAuth } from '../context/AuthContext';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
-interface FailedGenerationCase {
-  jobId: string;
-  caseId: string;
-  projectId: string;
-  projectName: string;
-  title: string;
-  page: string;
-  type: 'UI' | 'API';
-  errorMessage: string;
-  retryErrorMessage: string;
-  retryStatus: 'idle' | 'running' | 'failed';
-}
-
 interface GenerationJobCase {
   id: string;
   sequence: number;
@@ -32,6 +19,7 @@ interface GenerationJobCase {
   status: 'planned' | 'generating' | 'saved' | 'failed';
   testCaseId?: string;
   errorMessage?: string;
+  retryErrorMessage?: string;
   retryStatus?: 'idle' | 'running' | 'failed';
 }
 
@@ -51,15 +39,6 @@ interface GenerationJob {
   scriptGenerationError?: string;
   cases: GenerationJobCase[];
 }
-
-const fetchFailedGenerationCases = async (token: string): Promise<FailedGenerationCase[]> => {
-  const response = await fetch(`${BACKEND_URL}/api/v2/generation-failures`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = await response.json() as { cases?: FailedGenerationCase[]; error?: string };
-  if (!response.ok) throw new Error(data.error || 'โหลดรายการสร้าง Test Script ที่ล้มเหลวไม่สำเร็จ');
-  return Array.isArray(data.cases) ? data.cases : [];
-};
 
 const fetchGenerationJobs = async (
   token: string,
@@ -136,9 +115,6 @@ export default function TestCasesPage() {
   const requestedJobId = searchParams.get('jobId');
   const [projects, setProjects] = useState<Project[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
-  const [failedGenerationCases, setFailedGenerationCases] = useState<FailedGenerationCase[]>([]);
-  const [isLoadingGenerationFailures, setIsLoadingGenerationFailures] = useState(true);
-  const [generationFailureRefreshKey, setGenerationFailureRefreshKey] = useState(0);
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
   const [isLoadingGenerationJobs, setIsLoadingGenerationJobs] = useState(true);
   const [generationJobsError, setGenerationJobsError] = useState('');
@@ -149,8 +125,6 @@ export default function TestCasesPage() {
   const [selectedPlanCaseIds, setSelectedPlanCaseIds] = useState<string[]>([]);
   const [generatingJobIds, setGeneratingJobIds] = useState<string[]>([]);
   const [generationActionMessage, setGenerationActionMessage] = useState('');
-  const [retryingCaseIds, setRetryingCaseIds] = useState<string[]>([]);
-  const [generationFailureMessage, setGenerationFailureMessage] = useState('');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingCase, setEditingCase] = useState<TestCase | null>(null);
@@ -186,30 +160,6 @@ export default function TestCasesPage() {
 
     return () => unsubCases();
   }, []);
-
-  useEffect(() => {
-    let active = true;
-    if (!user) {
-      return () => { active = false; };
-    }
-
-    user.getIdToken()
-      .then(fetchFailedGenerationCases)
-      .then(cases => {
-        if (active) {
-          setFailedGenerationCases(cases);
-          setGenerationFailureMessage('');
-        }
-      })
-      .catch(error => {
-        if (active) setGenerationFailureMessage(error instanceof Error ? error.message : 'โหลดรายการที่ล้มเหลวไม่สำเร็จ');
-      })
-      .finally(() => {
-        if (active) setIsLoadingGenerationFailures(false);
-      });
-
-    return () => { active = false; };
-  }, [user, generationFailureRefreshKey]);
 
   useEffect(() => {
     let active = true;
@@ -277,18 +227,8 @@ export default function TestCasesPage() {
         });
       }
     });
-    failedGenerationCases.forEach(failedCase => {
-      if (!projectMap.has(failedCase.projectId)) {
-        projectMap.set(failedCase.projectId, {
-          id: failedCase.projectId,
-          name: failedCase.projectName,
-          url: '',
-          createdAt: new Date(0),
-        });
-      }
-    });
     return Array.from(projectMap.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }, [projects, generationJobs, failedGenerationCases]);
+  }, [projects, generationJobs]);
 
   const activeProjectId = selectedProjectId && allProjects.some(project => project.id === selectedProjectId)
     ? selectedProjectId
@@ -297,9 +237,6 @@ export default function TestCasesPage() {
   const filteredCases = activeProjectId
     ? testCases.filter(tc => tc.projectId === activeProjectId)
     : [];
-  const filteredFailedGenerationCases = activeProjectId
-    ? failedGenerationCases.filter(failedCase => failedCase.projectId === activeProjectId)
-    : failedGenerationCases;
   const filteredGenerationJobs = activeProjectId
     ? generationJobs.filter(job => job.projectId === activeProjectId && (!requestedJobId || job.id === requestedJobId))
     : [];
@@ -336,36 +273,6 @@ export default function TestCasesPage() {
       setGenerationActionMessage(error instanceof Error ? error.message : 'เริ่มสร้าง Test Script ไม่สำเร็จ');
     } finally {
       setGeneratingJobIds(previous => previous.filter(id => id !== jobId));
-    }
-  };
-
-  const handleRetryGenerationCase = async (failedCase: FailedGenerationCase) => {
-    if (!user) return;
-    const retryKey = `${failedCase.jobId}:${failedCase.caseId}`;
-    setRetryingCaseIds(previous => [...previous, retryKey]);
-    setGenerationFailureMessage('');
-    try {
-      const token = await user.getIdToken();
-      const response = await fetch(`${BACKEND_URL}/api/v2/generation-jobs/${encodeURIComponent(failedCase.jobId)}/cases/${encodeURIComponent(failedCase.caseId)}/retry`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || 'สร้าง Test Script ใหม่ไม่สำเร็จ');
-      const cases = await fetchFailedGenerationCases(token);
-      setFailedGenerationCases(cases);
-      setGenerationJobsRefreshKey(key => key + 1);
-    } catch (error) {
-      setGenerationFailureMessage(error instanceof Error ? error.message : 'สร้าง Test Script ใหม่ไม่สำเร็จ');
-      setGenerationJobsRefreshKey(key => key + 1);
-      try {
-        const token = await user.getIdToken();
-        setFailedGenerationCases(await fetchFailedGenerationCases(token));
-      } catch (refreshError) {
-        console.error(refreshError);
-      }
-    } finally {
-      setRetryingCaseIds(previous => previous.filter(id => id !== retryKey));
     }
   };
 
@@ -595,6 +502,7 @@ export default function TestCasesPage() {
                               <p className="mt-2 text-xs text-gray-600"><span className="font-medium">ผลที่คาดหวัง:</span> {testCase.expectedResult}</p>
                               {testCase.testCaseId && <p className="mt-1 text-xs text-gray-500">Test Script ID: {testCase.testCaseId}</p>}
                               {testCase.errorMessage && <p className="mt-1 text-xs text-red-700">{testCase.errorMessage}</p>}
+                              {testCase.retryErrorMessage && <p className="mt-1 text-xs text-red-700">ลองใหม่ล่าสุดไม่สำเร็จ: {testCase.retryErrorMessage}</p>}
                             </div>
                             {isEligible && !isGenerating && planReady && (
                               <button
@@ -603,7 +511,7 @@ export default function TestCasesPage() {
                                 disabled={!user}
                                 className="col-start-2 justify-self-start text-xs font-medium text-blue-700 hover:text-blue-900 disabled:opacity-50 sm:col-start-3 sm:self-center"
                               >
-                                สร้าง Script
+                                {testCase.status === 'failed' ? 'ลองสร้างใหม่' : 'สร้าง Script'}
                               </button>
                             )}
                           </li>
@@ -612,58 +520,6 @@ export default function TestCasesPage() {
                     </ol>
                   )}
                 </article>
-              );
-            })
-          )}
-        </section>
-
-        <section className="bg-white rounded-xl border border-amber-200 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-amber-100 px-4 py-3">
-            <h2 className="text-sm font-semibold text-gray-800">สร้าง Test Script ไม่สำเร็จ</h2>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-amber-700">{filteredFailedGenerationCases.length} รายการ</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsLoadingGenerationFailures(true);
-                  setGenerationFailureRefreshKey(key => key + 1);
-                }}
-                disabled={isLoadingGenerationFailures || !user}
-                className="text-xs font-medium text-blue-600 hover:text-blue-800 disabled:cursor-wait disabled:opacity-50"
-              >
-                {isLoadingGenerationFailures ? 'กำลังโหลด...' : 'รีเฟรชรายการ'}
-              </button>
-            </div>
-          </div>
-          {generationFailureMessage && (
-            <p role="alert" className="px-4 py-3 text-sm text-red-700 bg-red-50">{generationFailureMessage}</p>
-          )}
-          {isLoadingGenerationFailures && filteredFailedGenerationCases.length === 0 ? (
-            <p className="px-4 py-4 text-sm text-gray-500">กำลังโหลดรายการที่ลองสร้างใหม่ได้...</p>
-          ) : filteredFailedGenerationCases.length === 0 ? (
-            <p className="px-4 py-4 text-sm text-gray-500">ไม่มี Test Script ที่ล้มเหลวในโปรเจกต์นี้ หากเพิ่งจบงาน ให้กด “รีเฟรชรายการ”</p>
-          ) : (
-            filteredFailedGenerationCases.map(failedCase => {
-              const retryKey = `${failedCase.jobId}:${failedCase.caseId}`;
-              const isRetrying = retryingCaseIds.includes(retryKey) || failedCase.retryStatus === 'running';
-              return (
-                <div key={retryKey} className="flex flex-col gap-3 border-b border-gray-100 px-4 py-4 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800">{failedCase.title}</p>
-                    <p className="mt-1 text-xs text-gray-500">{failedCase.projectName}{failedCase.page ? ` · ${failedCase.page}` : ''}</p>
-                    <p className="mt-2 text-xs text-red-700">{failedCase.errorMessage}</p>
-                    {failedCase.retryErrorMessage && (
-                      <p className="mt-1 text-xs text-red-700">ลองใหม่ล่าสุดไม่สำเร็จ: {failedCase.retryErrorMessage}</p>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => handleRetryGenerationCase(failedCase)}
-                    disabled={isRetrying || !user}
-                    className="shrink-0 rounded-md bg-amber-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isRetrying ? 'กำลังลองสร้างใหม่...' : 'สร้าง Test Script ใหม่'}
-                  </button>
-                </div>
               );
             })
           )}

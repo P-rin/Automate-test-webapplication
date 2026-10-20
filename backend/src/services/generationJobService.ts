@@ -295,7 +295,7 @@ const generateAndSaveCaseScript = async (
   const testCaseId = await saveGeneratedTestCase({
     projectName,
     url: targetUrl,
-    title: generated.title,
+    title: plan.title,
     type: plan.type,
     criteria: [],
     script: generated.script,
@@ -308,7 +308,7 @@ const generateAndSaveCaseScript = async (
     testCaseId,
     errorMessage: FieldValue.delete(),
   });
-  return { testCaseId, title: generated.title };
+  return { testCaseId, title: plan.title };
 };
 
 const processGenerationJobScripts = async (
@@ -469,6 +469,7 @@ export const listGenerationJobCases = async (
       status: data.status,
       testCaseId: data.testCaseId,
       errorMessage: data.errorMessage,
+      retryErrorMessage: data.retryErrorMessage,
       retryStatus: data.retryStatus,
     };
   });
@@ -615,7 +616,7 @@ export const retryFailedGenerationCase = async (
     const testCaseId = await saveGeneratedTestCase({
       projectName,
       url: targetUrl,
-      title: generated.title,
+      title: plan.title,
       type: plan.type,
       criteria: [],
       script: generated.script,

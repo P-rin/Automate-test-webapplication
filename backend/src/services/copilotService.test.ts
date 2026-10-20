@@ -67,6 +67,24 @@ test("validateGeneratedScript accepts valid Playwright script", () => {
   assert.doesNotThrow(() => validateGeneratedScript(validScript));
 });
 
+test("validateGeneratedScript rejects MCP tool names and snapshot references", () => {
+  const invalidScripts = [
+    `import { test, expect } from '@playwright/test';\n` +
+      `test('example', async ({ page }) => {\n` +
+      `  await browser_click({ ref: 'f6e14' });\n` +
+      `  await expect(page).toBeVisible();\n` +
+      `});\n`,
+    `import { test, expect } from '@playwright/test';\n` +
+      `test('example', async ({ page }) => {\n` +
+      `  await page.click('[ref="f6e14"]');\n` +
+      `  await expect(page).toBeVisible();\n` +
+      `});\n`,
+  ];
+
+  assert.throws(() => validateGeneratedScript(invalidScripts[0]), /MCP browser tool names/i);
+  assert.throws(() => validateGeneratedScript(invalidScripts[1]), /snapshot reference selectors/i);
+});
+
 test("validateGeneratedScript rejects script with missing import", () => {
   const invalidScript = `test('example', async ({ page }) => {\n` +
     `  await page.goto('https://example.com');\n` +
@@ -140,7 +158,7 @@ test("normalizeGeneratedScript leaves normal playwright script unchanged", () =>
   assert.equal(normalizeGeneratedScript(normalScript), normalScript);
 });
 
-test("buildAgentGenerationPrompt includes target URL and MCP guidance", () => {
+test("buildAgentGenerationPrompt includes target URL and Playwright-only rules", () => {
   const prompt = buildAgentGenerationPrompt({
     projectName: "Demo app",
     targetUrl: "http://localhost:5173/",
@@ -155,7 +173,10 @@ test("buildAgentGenerationPrompt includes target URL and MCP guidance", () => {
     testSteps: ["Open login page", "Submit credentials"],
   });
 
-  assert.match(prompt, /Playwright MCP/i);
+  assert.match(prompt, /fixture page/i);
+  assert.match(prompt, /process\.env\.TEST_EMAIL/);
+  assert.match(prompt, /browser_/);
+  assert.match(prompt, /ref=/);
   assert.match(prompt, /http:\/\/localhost:5173\//i);
   assert.match(prompt, /Ensure login flow works/i);
 });
@@ -217,6 +238,43 @@ test("generateSingleScript validates an Ollama-generated Playwright script", asy
 
   assert.equal(generated.script, script);
   assert.doesNotThrow(() => validateGeneratedScript(generated.script));
+});
+
+test("generateSingleScript withholds browser tools", async () => {
+  const script = `import { test, expect } from '@playwright/test';\n\n` +
+    `test('page loads', async ({ page }) => {\n` +
+    `  await page.goto('https://example.com');\n` +
+    `  await expect(page.getByRole('heading', { name: /example/i })).toBeVisible();\n` +
+    `});\n`;
+  const calls: string[] = [];
+  let request: {
+    messages: Array<{ role: string; content: string }>;
+    tools?: unknown[];
+  } | undefined;
+  const ollamaClient = {
+    chat: async (chatRequest: NonNullable<typeof request>) => {
+      request = chatRequest;
+      return { message: { content: JSON.stringify({ id: "TC-001", title: "Page loads", script }) } };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "Page loads",
+    description: "Verify the page loads",
+    type: "UI",
+    testSteps: ["Open the page"],
+    expectedResult: "The page heading is visible",
+  }, {
+    ollamaClient,
+    mcpClient: mockMcpClient(calls),
+  });
+
+  assert.deepEqual(request?.tools, []);
+  assert.deepEqual(calls, []);
+  const prompt = request?.messages.find((message) => message.role === "user")?.content ?? "";
+  assert.match(prompt, /Never use MCP tools/i);
+  assert.match(prompt, /process\.env\.TEST_EMAIL/);
 });
 
 test("generateTestPlans rejects malformed Ollama JSON", async () => {
