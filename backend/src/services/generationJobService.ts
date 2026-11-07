@@ -6,6 +6,7 @@ import { discoverAccessibilitySnapshot } from "./snapshotService.js";
 import { processSnapshotTestPlans, generateSingleScript, LlmGenerationOptions } from "./ollamaService.js";
 import type { TestPlan } from "../types.js";
 import { toProjectId } from "../utils/project.js";
+import { cacheCasePatch, cacheCreatedJob, cacheJobPatch, cacheTimestampNow, dropJobCache } from "./jobProgressCache.js";
 
 interface GenerationJobPayload {
   projectName: string;
@@ -13,6 +14,13 @@ interface GenerationJobPayload {
   specification: string;
   ownerUid?: string;
 }
+
+const cacheableFirestoreValue = (value: unknown): boolean => {
+  if (value && typeof value === "object") {
+    return !(value as { constructor?: { name?: string } }).constructor?.name?.includes("FieldValue");
+  }
+  return true;
+};
 
 interface GenerationJobUpdate {
   status?: "pending" | "running" | "completed" | "incomplete" | "failed";
@@ -51,7 +59,7 @@ export const getGenerationJob = async (jobId: string, ownerUid?: string): Promis
 };
 
 export const createGenerationJob = async (payload: GenerationJobPayload): Promise<string> => {
-  const docRef = await db.collection("generationJobs").add({
+  const data: Record<string, unknown> = {
     projectName: payload.projectName,
     targetUrl: payload.targetUrl,
     specification: payload.specification,
@@ -76,7 +84,9 @@ export const createGenerationJob = async (payload: GenerationJobPayload): Promis
     createdAt: FieldValue.serverTimestamp(),
     startedAt: null,
     completedAt: null,
-  });
+  };
+  const docRef = await db.collection("generationJobs").add(data);
+  cacheCreatedJob(docRef.id, { ...data, createdAt: cacheTimestampNow() });
 
   return docRef.id;
 };
@@ -104,6 +114,11 @@ export const updateGenerationJob = async (
   if (update.completedAt) payload.completedAt = FieldValue.serverTimestamp();
 
   await db.collection("generationJobs").doc(jobId).update(payload);
+  cacheJobPatch(jobId, {
+    ...Object.fromEntries(Object.entries(payload).filter(([, value]) => cacheableFirestoreValue(value))),
+    ...(update.startedAt ? { startedAt: cacheTimestampNow() } : {}),
+    ...(update.completedAt ? { completedAt: cacheTimestampNow() } : {}),
+  });
 };
 
 interface GenerationCaseProgress {
@@ -242,6 +257,7 @@ const updateGenerationCase = async (jobId: string, caseId: string, update: Gener
     ...update,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
+  cacheCasePatch(jobId, caseId, { ...update });
 };
 
 const updateGenerationCaseFields = async (
@@ -253,6 +269,7 @@ const updateGenerationCaseFields = async (
     ...update,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
+  cacheCasePatch(jobId, caseId, { ...update });
 };
 
 const generateAndSaveCaseScript = async (
@@ -379,6 +396,7 @@ export const startGenerationJobScriptGeneration = async (
   requestedCaseIds: string[] | undefined,
   options: LlmGenerationOptions = {},
 ): Promise<{ acceptedCaseCount: number }> => {
+  dropJobCache(jobId);
   const jobRef = db.collection("generationJobs").doc(jobId);
   const casesCollection = jobRef.collection("cases");
   const requestIds = requestedCaseIds ? [...new Set(requestedCaseIds)] : undefined;
@@ -477,6 +495,42 @@ export const listGenerationJobCases = async (
   return { cases, cursor: `${seconds}:${nanoseconds}` };
 };
 
+export const reconcileInterruptedGenerationJobs = async (): Promise<number> => {
+  const snapshot = await db.collection("generationJobs").where("status", "==", "running").get();
+  await Promise.all(snapshot.docs.map(async (document) => {
+    await document.ref.update({
+      status: "incomplete",
+      stage: "completed",
+      coverageComplete: false,
+      coverageStopReason: "Backend stopped before planning completed",
+      message: "Planning interrupted by backend restart",
+      completedAt: FieldValue.serverTimestamp(),
+    });
+  }));
+
+  const scriptSnapshot = await db.collection("generationJobs")
+    .where("scriptGenerationStatus", "==", "running")
+    .get();
+  await Promise.all(scriptSnapshot.docs.map(async (document) => {
+    const generatingCases = await document.ref.collection("cases")
+      .where("status", "==", "generating")
+      .get();
+    await Promise.all(generatingCases.docs.map(caseDocument => caseDocument.ref.update({
+      status: "planned",
+      retryStatus: "idle",
+      scriptStartedAt: FieldValue.delete(),
+    })));
+    await document.ref.update({
+      scriptGenerationStatus: "failed",
+      scriptGenerationError: "Backend stopped before script generation completed",
+      scriptGenerationMessage: "Script generation interrupted by backend restart",
+      scriptGenerationCompletedAt: FieldValue.serverTimestamp(),
+    });
+  }));
+
+  return snapshot.size + scriptSnapshot.size;
+};
+
 export const listGenerationJobs = async (ownerUid: string): Promise<Record<string, unknown>[]> => {
   const snapshot = await db.collection("generationJobs").where("ownerUid", "==", ownerUid).get();
   return snapshot.docs.map((document) => {
@@ -540,6 +594,7 @@ export const retryFailedGenerationCase = async (
   ownerUid: string,
   options: LlmGenerationOptions = {},
 ): Promise<{ testCaseId: string; title: string }> => {
+  dropJobCache(jobId);
   const jobRef = db.collection("generationJobs").doc(jobId);
   const caseRef = jobRef.collection("cases").doc(caseId);
   const { job, generationCase } = await db.runTransaction(async (transaction) => {
@@ -684,6 +739,7 @@ export const processGenerateJob = async (
   let failedCaseCount = 0;
   let processedSnapshotCount = 0;
   let coverageStopReason = "";
+  let lastJobFlush = 0;
 
   try {
     await updateGenerationJob(jobId, { message: "Building accessibility snapshot" });
@@ -728,12 +784,18 @@ export const processGenerateJob = async (
           const caseProgress = buildPlannedGenerationCase(plan, caseCount, snapshot.title, snapshotIds[snapshotIndex]);
 
           await updateGenerationCase(jobId, caseProgress.id, caseProgress);
-          await updateGenerationJob(jobId, {
-            stage: "planning",
+          const progress = {
+            stage: "planning" as const,
             caseCount,
             percentage: Math.min(90, 10 + Math.floor((snapshotIndex / Math.max(snapshots.length, 1)) * 80)),
             message: `Planned testcase ${caseCount}: ${caseProgress.title}`,
-          });
+          };
+          if (Date.now() - lastJobFlush > 5000) {
+            await updateGenerationJob(jobId, progress);
+            lastJobFlush = Date.now();
+          } else {
+            cacheJobPatch(jobId, progress);
+          }
           return true;
         },
       );
@@ -775,6 +837,7 @@ export const processGenerateJob = async (
         : coverageStopReason,
       completedAt: true,
     });
+    dropJobCache(jobId, 2 * 60_000);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await updateGenerationJob(jobId, {
@@ -790,5 +853,6 @@ export const processGenerateJob = async (
       errorMessage: message,
       completedAt: true,
     });
+    dropJobCache(jobId, 2 * 60_000);
   }
 };

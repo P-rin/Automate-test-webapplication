@@ -29,6 +29,7 @@ import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
 import { readSpecFiles } from "../services/specReader.js";
 import { artifactToSavePayload, getTestCasesByIds, saveGeneratedTestCase, updateTestCaseScript } from "../services/testCaseService.js";
 import { isValidTargetUrl } from "../utils/project.js";
+import { readJobFromCache } from "../services/jobProgressCache.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 10 } });
 
@@ -270,8 +271,49 @@ apiRouter.post("/v2/generation-jobs/:jobId/cases/:caseId/retry", requireFirebase
 
 apiRouter.get("/v2/generation-jobs/:jobId", requireFirebaseAuth, async (req, res) => {
   try {
-    const job = await getGenerationJob(req.params.jobId, getFirebaseUid(res));
     const rawCursor = typeof req.query.since === "string" ? req.query.since : "";
+    const cached = /^v\d+$/.test(rawCursor) || rawCursor === ""
+      ? readJobFromCache(req.params.jobId, /^v\d+$/.test(rawCursor) ? Number(rawCursor.slice(1)) : 0)
+      : null;
+    if (cached && cached.job.ownerUid === getFirebaseUid(res)) {
+      const primaryMeta = cached.job.primaryGeneratedTest as { id?: unknown; title?: unknown } | undefined;
+      const primaryId = typeof primaryMeta?.id === "string" ? primaryMeta.id : "";
+      const primaryCase = req.query.includePrimaryScript !== "false" && primaryId
+        ? (await getTestCasesByIds([primaryId]))[0]
+        : undefined;
+      return res.json({
+        id: cached.job.id,
+        status: cached.job.status,
+        percentage: cached.job.percentage,
+        stage: cached.job.stage,
+        message: cached.job.message,
+        errorMessage: cached.job.errorMessage,
+        caseCount: cached.job.caseCount,
+        completedCaseCount: cached.job.completedCaseCount,
+        failedCaseCount: cached.job.failedCaseCount,
+        snapshotCount: cached.job.snapshotCount,
+        processedSnapshotCount: cached.job.processedSnapshotCount,
+        coverageComplete: cached.job.coverageComplete,
+        coverageStopReason: cached.job.coverageStopReason,
+        scriptGenerationStatus: cached.job.scriptGenerationStatus,
+        scriptGenerationTargetCount: cached.job.scriptGenerationTargetCount,
+        scriptGenerationCompletedCount: cached.job.scriptGenerationCompletedCount,
+        scriptGenerationCurrentCaseId: cached.job.scriptGenerationCurrentCaseId,
+        scriptGenerationCurrentTitle: cached.job.scriptGenerationCurrentTitle,
+        scriptGenerationMessage: cached.job.scriptGenerationMessage,
+        scriptGenerationError: cached.job.scriptGenerationError,
+        primaryGeneratedTest: primaryCase
+          ? { id: primaryCase.id, title: String(primaryMeta?.title ?? ""), script: primaryCase.script }
+          : undefined,
+        cases: cached.cases,
+        caseCursor: cached.cursor,
+        source: cached.job.source,
+        startedAt: cached.job.startedAt,
+        completedAt: cached.job.completedAt,
+        createdAt: cached.job.createdAt,
+      });
+    }
+    const job = await getGenerationJob(req.params.jobId, getFirebaseUid(res));
     const cursorParts = rawCursor.match(/^(\d+):(\d+)$/);
     const updatedAfter = cursorParts
       ? new Timestamp(Number(cursorParts[1]), Number(cursorParts[2]))

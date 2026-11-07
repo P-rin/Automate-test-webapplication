@@ -3,6 +3,7 @@ import express from "express";
 import path from "node:path";
 import { env } from "./config/env.js";
 import { apiRouter } from "./routes/api.js";
+import { reconcileInterruptedGenerationJobs } from "./services/generationJobService.js";
 
 const app = express();
 
@@ -46,9 +47,21 @@ app.use(
 
 app.use("/api", apiRouter);
 
-const server = app.listen(env.port, () => {
-  console.log(`Backend listening on http://localhost:${env.port}`);
-});
+const startServer = async () => {
+  const reconciledCount = await reconcileInterruptedGenerationJobs();
+  if (reconciledCount > 0) {
+    console.log(`Recovered ${reconciledCount} interrupted generation job(s)`);
+  }
 
-// Ensure the Node HTTP server socket timeout matches the application timeout
-server.timeout = env.requestTimeoutMs;
+  const server = app.listen(env.port, () => {
+    console.log(`Backend listening on http://localhost:${env.port}`);
+  });
+
+  // Ensure the Node HTTP server socket timeout matches the application timeout
+  server.timeout = env.requestTimeoutMs;
+};
+
+void startServer().catch((error) => {
+  console.error("Failed to start backend", error);
+  process.exitCode = 1;
+});
