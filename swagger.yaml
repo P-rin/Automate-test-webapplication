@@ -205,6 +205,56 @@ paths:
                       $ref: '#/components/schemas/GenerationJobSummary'
         '401':
           description: Firebase ID token missing, invalid, or expired
+  /api/v2/generation-jobs/{jobId}/coverage:
+    get:
+      summary: Get acceptance-criteria coverage for a generation job
+      operationId: getGenerationJobCoverage
+      security:
+        - firebaseBearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Coverage report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoverageReport'
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+        '404':
+          description: Generation job not found or not owned by the authenticated user
+        '500':
+          description: Failed to load coverage data
+  /api/v2/generation-jobs/{jobId}/coverage.md:
+    get:
+      summary: Export generation-job coverage as Markdown
+      operationId: exportGenerationJobCoverageMarkdown
+      security:
+        - firebaseBearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: TESTS.md coverage report
+          content:
+            text/markdown:
+              schema:
+                type: string
+        '401':
+          description: Firebase ID token missing, invalid, or expired
+        '404':
+          description: Generation job not found or not owned by the authenticated user
+        '500':
+          description: Failed to load coverage data
   /api/v2/generation-jobs/{jobId}:
     get:
       summary: Get generation job status (v2)
@@ -528,6 +578,125 @@ components:
           type: boolean
         reason:
           type: string
+    CoverageReport:
+      type: object
+      required:
+        - criteria
+        - totals
+        - exploratoryCaseCount
+        - analysisWarnings
+        - ambiguities
+        - cases
+      properties:
+        criteria:
+          type: array
+          items:
+            $ref: '#/components/schemas/CoverageCriterion'
+        totals:
+          type: object
+          required: [missing, in_progress, unverified, failing, covered, manual]
+          properties:
+            missing:
+              type: integer
+            in_progress:
+              type: integer
+            unverified:
+              type: integer
+            failing:
+              type: integer
+            covered:
+              type: integer
+            manual:
+              type: integer
+        exploratoryCaseCount:
+          type: integer
+        analysisWarnings:
+          type: array
+          items:
+            type: string
+        ambiguities:
+          type: array
+          items:
+            type: object
+            required: [acId, text]
+            properties:
+              acId:
+                type: string
+              text:
+                type: string
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/CoverageCase'
+    CoverageCriterion:
+      type: object
+      required: [id, requirementRef, scenario, action, expected, mustNot, category, priority, verification, ambiguity, state, linkedCases, needsNegativeCase]
+      properties:
+        id:
+          type: string
+        requirementRef:
+          type: string
+        scenario:
+          type: string
+        action:
+          type: string
+        expected:
+          type: string
+        mustNot:
+          type: string
+        category:
+          type: string
+          enum: [happy_path, validation, negative, boundary, access_control]
+        priority:
+          type: string
+          enum: [required, important, optional]
+        verification:
+          type: string
+          enum: [automated, manual]
+        ambiguity:
+          type: string
+        state:
+          type: string
+          enum: [missing, in_progress, unverified, failing, covered, manual]
+        source:
+          type: object
+          properties:
+            ref:
+              type: string
+            section:
+              type: string
+            sourceText:
+              type: string
+        linkedCases:
+          type: array
+          items:
+            $ref: '#/components/schemas/CoverageCase'
+        gapReason:
+          type: string
+        needsNegativeCase:
+          type: boolean
+    CoverageCase:
+      type: object
+      required: [id, title, status]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        requirementIds:
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+        testCaseId:
+          type: string
+        page:
+          type: string
+        lastStatus:
+          type: string
     GenerationRequest:
       type: object
       required:
@@ -540,6 +709,9 @@ components:
           type: string
         requirements:
           type: string
+        allowMutatingTests:
+          type: boolean
+          description: Allow planner to create tests that complete data-changing actions. Defaults to false.
         files:
           type: array
           items:
@@ -858,6 +1030,10 @@ components:
           type: integer
         failCount:
           type: integer
+        flakyCount:
+          type: integer
+        skippedCount:
+          type: integer
         totalDuration:
           type: integer
         logs:
@@ -865,6 +1041,14 @@ components:
           items:
             type: object
         screenshotUrls:
+          type: array
+          items:
+            type: string
+        videoUrls:
+          type: array
+          items:
+            type: string
+        traceUrls:
           type: array
           items:
             type: string

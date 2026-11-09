@@ -44,6 +44,18 @@ app.use(
     fallthrough: false,
   }),
 );
+app.use(
+  "/static/videos",
+  express.static(path.resolve(process.cwd(), "storage", "videos"), {
+    fallthrough: false,
+  }),
+);
+app.use(
+  "/static/traces",
+  express.static(path.resolve(process.cwd(), "storage", "traces"), {
+    fallthrough: false,
+  }),
+);
 
 app.use("/api", apiRouter);
 

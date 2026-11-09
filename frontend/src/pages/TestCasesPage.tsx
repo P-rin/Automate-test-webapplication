@@ -17,10 +17,38 @@ interface GenerationJobCase {
   expectedResult: string;
   page: string;
   status: 'planned' | 'generating' | 'saved' | 'failed';
+  requirementIds?: string[];
+  category?: string;
   testCaseId?: string;
   errorMessage?: string;
   retryErrorMessage?: string;
   retryStatus?: 'idle' | 'running' | 'failed';
+}
+
+type CoverageState = 'missing' | 'in_progress' | 'unverified' | 'failing' | 'covered' | 'manual';
+
+interface CoverageReport {
+  criteria: Array<{
+    id: string;
+    priority: string;
+    expected: string;
+    state: CoverageState;
+    ambiguity: string;
+    linkedCases: Array<{
+      id: string;
+      title: string;
+      status: string;
+      lastStatus?: string;
+    }>;
+  }>;
+  totals: Record<CoverageState, number>;
+  ambiguities: Array<{ acId: string; text: string }>;
+}
+
+interface CoveragePanelState {
+  report?: CoverageReport;
+  isLoading: boolean;
+  error?: string;
 }
 
 interface GenerationJob {
@@ -39,6 +67,42 @@ interface GenerationJob {
   scriptGenerationError?: string;
   cases: GenerationJobCase[];
 }
+
+const testPlanCategoryLabels: Record<string, string> = {
+  happy_path: 'เส้นทางปกติ',
+  validation: 'ตรวจสอบข้อมูล',
+  negative: 'กรณีผิดพลาด',
+  boundary: 'ค่าขอบเขต',
+  access_control: 'สิทธิ์การเข้าถึง',
+  exploratory: 'สำรวจเพิ่มเติม',
+};
+
+const coverageStateLabels: Record<CoverageState, string> = {
+  missing: 'ยังไม่มีเคส',
+  in_progress: 'รอดำเนินการ',
+  unverified: 'ยังไม่ยืนยันผล',
+  failing: 'ไม่ผ่าน',
+  covered: 'ครอบคลุมแล้ว',
+  manual: 'ตรวจสอบด้วยคน',
+};
+
+const coverageStateStyles: Record<CoverageState, string> = {
+  missing: 'bg-gray-100 text-gray-700',
+  in_progress: 'bg-blue-100 text-blue-800',
+  unverified: 'bg-amber-100 text-amber-800',
+  failing: 'bg-red-100 text-red-700',
+  covered: 'bg-green-100 text-green-700',
+  manual: 'bg-purple-100 text-purple-700',
+};
+
+const coverageStates: CoverageState[] = [
+  'missing',
+  'in_progress',
+  'unverified',
+  'failing',
+  'covered',
+  'manual',
+];
 
 const fetchGenerationJobs = async (
   token: string,
@@ -127,6 +191,9 @@ export default function TestCasesPage() {
   const [isLoadingGenerationJobs, setIsLoadingGenerationJobs] = useState(true);
   const [generationJobsError, setGenerationJobsError] = useState('');
   const [generationJobsRefreshKey, setGenerationJobsRefreshKey] = useState(0);
+  const [expandedCoverageJobIds, setExpandedCoverageJobIds] = useState<Set<string>>(() => new Set());
+  const [coverageByJobId, setCoverageByJobId] = useState<Record<string, CoveragePanelState>>({});
+  const [coverageExportErrors, setCoverageExportErrors] = useState<Record<string, string>>({});
   const generationJobCursors = useRef(new Map<string, string>());
   const generationCasesByJob = useRef(new Map<string, GenerationJobCase[]>());
   const generationJobActiveStates = useRef(new Map<string, boolean>());
@@ -296,6 +363,82 @@ export default function TestCasesPage() {
     }
   };
 
+  const fetchCoverage = async (jobId: string) => {
+    if (!user) return;
+    setCoverageByJobId(previous => ({
+      ...previous,
+      [jobId]: { ...previous[jobId], isLoading: true, error: undefined },
+    }));
+
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${BACKEND_URL}/api/v2/generation-jobs/${encodeURIComponent(jobId)}/coverage`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json() as CoverageReport & { error?: string };
+      if (!response.ok) throw new Error(data.error || 'โหลดสรุป Requirement Coverage ไม่สำเร็จ');
+      setCoverageByJobId(previous => ({
+        ...previous,
+        [jobId]: { report: data, isLoading: false },
+      }));
+    } catch (error) {
+      setCoverageByJobId(previous => ({
+        ...previous,
+        [jobId]: {
+          ...previous[jobId],
+          isLoading: false,
+          error: error instanceof Error ? error.message : 'โหลดสรุป Requirement Coverage ไม่สำเร็จ',
+        },
+      }));
+    }
+  };
+
+  const toggleCoveragePanel = (jobId: string) => {
+    const isExpanded = expandedCoverageJobIds.has(jobId);
+    setExpandedCoverageJobIds(previous => {
+      const next = new Set(previous);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+
+    const panel = coverageByJobId[jobId];
+    if (!isExpanded && !panel?.isLoading && (!panel?.report || panel.error)) void fetchCoverage(jobId);
+  };
+
+  const handleExportCoverage = async (jobId: string) => {
+    if (!user) return;
+    setCoverageExportErrors(previous => ({ ...previous, [jobId]: '' }));
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${BACKEND_URL}/api/v2/generation-jobs/${encodeURIComponent(jobId)}/coverage.md`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') ?? '';
+        const message = contentType.includes('application/json')
+          ? ((await response.json()) as { error?: string }).error
+          : undefined;
+        throw new Error(message || 'ส่งออก TESTS.md ไม่สำเร็จ');
+      }
+
+      const markdown = await response.blob();
+      const downloadUrl = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = 'TESTS.md';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+    } catch (error) {
+      setCoverageExportErrors(previous => ({
+        ...previous,
+        [jobId]: error instanceof Error ? error.message : 'ส่งออก TESTS.md ไม่สำเร็จ',
+      }));
+    }
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
@@ -352,11 +495,12 @@ export default function TestCasesPage() {
     const map: Record<string, string> = {
       pass: 'bg-green-100 text-green-700',
       fail: 'bg-red-100 text-red-600',
+      flaky: 'bg-amber-100 text-amber-800',
       running: 'bg-yellow-100 text-yellow-700',
       pending: 'bg-gray-100 text-gray-500',
     };
     const labels: Record<string, string> = {
-      pass: 'ผ่าน', fail: 'ไม่ผ่าน', running: 'กำลังรัน', pending: 'รอดำเนินการ',
+      pass: 'ผ่าน', fail: 'ไม่ผ่าน', flaky: 'ไม่เสถียร', running: 'กำลังรัน', pending: 'รอดำเนินการ',
     };
     return (
       <span className={`text-xs px-2 py-1 rounded-full font-medium ${map[status] || map.pending}`}>
@@ -435,6 +579,8 @@ export default function TestCasesPage() {
                 .filter(testCase => selectedPlanCaseIds.includes(`${job.id}:${testCase.id}`))
                 .map(testCase => testCase.id);
               const isGenerating = generatingJobIds.includes(job.id) || job.scriptGenerationStatus === 'running';
+              const isCoverageExpanded = expandedCoverageJobIds.has(job.id);
+              const coveragePanel = coverageByJobId[job.id];
 
               return (
                 <article key={job.id} className="border-b border-gray-100 last:border-b-0">
@@ -470,8 +616,129 @@ export default function TestCasesPage() {
                       >
                         {isGenerating ? 'กำลังสร้าง...' : `สร้างทั้งหมดที่เหลือ (${eligibleCases.length})`}
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleCoveragePanel(job.id)}
+                        aria-expanded={isCoverageExpanded}
+                        aria-controls={`${job.id}-coverage`}
+                        disabled={!user}
+                        className="rounded-md border border-teal-700 px-3 py-2 text-xs font-medium text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {isCoverageExpanded ? 'ซ่อน Requirement Coverage' : 'Requirement Coverage'}
+                      </button>
                     </div>
                   </div>
+                  {isCoverageExpanded && (
+                    <section
+                      id={`${job.id}-coverage`}
+                      aria-label="สรุป Requirement Coverage"
+                      className="space-y-4 border-b border-teal-100 bg-teal-50/40 p-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-900">สรุป Requirement Coverage</h3>
+                          <p className="mt-1 text-xs text-gray-600">สถานะการทดสอบตาม Acceptance Criteria ของ Job นี้</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {coveragePanel?.report && (
+                            <button
+                              type="button"
+                              onClick={() => void handleExportCoverage(job.id)}
+                              className="rounded-md bg-teal-700 px-3 py-2 text-xs font-medium text-white hover:bg-teal-800"
+                            >
+                              Export TESTS.md
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void fetchCoverage(job.id)}
+                            disabled={coveragePanel?.isLoading}
+                            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-wait disabled:opacity-50"
+                          >
+                            {coveragePanel?.isLoading ? 'กำลังโหลด...' : 'โหลดใหม่'}
+                          </button>
+                        </div>
+                      </div>
+                      {coveragePanel?.isLoading && <p role="status" className="text-sm text-gray-600">กำลังโหลดข้อมูล Coverage...</p>}
+                      {coveragePanel?.error && (
+                        <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                          {coveragePanel.error}
+                        </p>
+                      )}
+                      {coverageExportErrors[job.id] && (
+                        <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                          {coverageExportErrors[job.id]}
+                        </p>
+                      )}
+                      {coveragePanel?.report && (
+                        <>
+                          <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                            {coverageStates.map(state => (
+                              <div key={state} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                                <dt className="text-xs text-gray-600">{coverageStateLabels[state]}</dt>
+                                <dd className="mt-1 text-lg font-semibold tabular-nums text-gray-900">
+                                  {coveragePanel.report?.totals[state] ?? 0}
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                          <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+                            <table className="w-full min-w-[760px] text-left text-xs">
+                              <thead className="bg-gray-50 text-gray-600">
+                                <tr>
+                                  <th className="px-3 py-2 font-semibold">Acceptance Criteria</th>
+                                  <th className="px-3 py-2 font-semibold">ความสำคัญ</th>
+                                  <th className="px-3 py-2 font-semibold">ผลที่คาดหวัง</th>
+                                  <th className="px-3 py-2 font-semibold">สถานะ</th>
+                                  <th className="px-3 py-2 font-semibold">เคสที่เชื่อมโยง</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {coveragePanel.report.criteria.map(criterion => (
+                                  <tr key={criterion.id} className="align-top">
+                                    <td className="whitespace-nowrap px-3 py-2 font-medium text-gray-800">{criterion.id}</td>
+                                    <td className="whitespace-nowrap px-3 py-2 text-gray-700">{criterion.priority}</td>
+                                    <td className="min-w-52 px-3 py-2 text-gray-700">{criterion.expected}</td>
+                                    <td className="whitespace-nowrap px-3 py-2">
+                                      <span className={`inline-flex rounded-full px-2 py-1 font-medium ${coverageStateStyles[criterion.state]}`}>
+                                        {coverageStateLabels[criterion.state]}
+                                      </span>
+                                    </td>
+                                    <td className="min-w-44 px-3 py-2 text-gray-700">
+                                      {criterion.linkedCases.length > 0
+                                        ? criterion.linkedCases.map(testCase => (
+                                          <span key={testCase.id} className="mb-1 mr-1 inline-flex rounded bg-gray-100 px-2 py-1">
+                                            {testCase.title} ({testCase.lastStatus ?? testCase.status})
+                                          </span>
+                                        ))
+                                        : 'ยังไม่มีเคสที่เชื่อมโยง'}
+                                    </td>
+                                  </tr>
+                                ))}
+                                {coveragePanel.report.criteria.length === 0 && (
+                                  <tr>
+                                    <td colSpan={5} className="px-3 py-4 text-center text-gray-500">Job นี้ไม่มี Acceptance Criteria</td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
+                            <h4 className="text-sm font-semibold text-amber-900">ข้อที่ควรยืนยันกับผู้ใช้</h4>
+                            {coveragePanel.report.ambiguities.length > 0 ? (
+                              <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-amber-900">
+                                {coveragePanel.report.ambiguities.map(ambiguity => (
+                                  <li key={ambiguity.acId}><span className="font-medium">{ambiguity.acId}:</span> {ambiguity.text}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="mt-2 text-sm text-amber-900">ไม่มีประเด็นที่ต้องยืนยัน</p>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </section>
+                  )}
                   {job.cases.length === 0 ? (
                     <p className="px-4 py-4 text-sm text-gray-500">Job นี้ยังไม่มี Test case ที่วางแผนไว้</p>
                   ) : (
@@ -543,6 +810,20 @@ export default function TestCasesPage() {
                                 <span className={`text-xs font-medium ${stateClass}`}>{stateLabel}</span>
                                 <span className="text-xs text-gray-500">{testCase.type}</span>
                               </div>
+                              {(testCase.category || (testCase.requirementIds?.length ?? 0) > 0) && (
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  {testCase.category && (
+                                    <span className="inline-flex rounded-full bg-teal-100 px-2 py-1 text-[11px] font-medium text-teal-800">
+                                      {testPlanCategoryLabels[testCase.category] ?? testCase.category}
+                                    </span>
+                                  )}
+                                  {testCase.requirementIds?.map(requirementId => (
+                                    <span key={requirementId} className="inline-flex rounded-full bg-indigo-100 px-2 py-1 text-[11px] font-medium text-indigo-800">
+                                      {requirementId}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                               <p className="mt-1 text-xs text-gray-500">{testCase.page}</p>
                               <p className="mt-2 text-sm text-gray-700">{testCase.description}</p>
                               <div id={detailsId} hidden={!areDetailsExpanded} className="mt-2">

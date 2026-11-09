@@ -3,15 +3,23 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { env } from "../config/env.js";
 import { saveGeneratedTestCase } from "./testCaseService.js";
 import { discoverAccessibilitySnapshot } from "./snapshotService.js";
-import { processSnapshotTestPlans, generateSingleScript, LlmGenerationOptions } from "./ollamaService.js";
-import type { TestPlan } from "../types.js";
+import {
+  processSnapshotTestPlans,
+  generateNextTestPlan,
+  generateSingleScript,
+  LlmGenerationOptions,
+  sanitizePlanTraceability,
+} from "./ollamaService.js";
+import { TEST_PLAN_CATEGORIES, type AcceptanceCriterion, type RequirementUnit, type TestPlan } from "../types.js";
 import { toProjectId } from "../utils/project.js";
 import { cacheCasePatch, cacheCreatedJob, cacheJobPatch, cacheTimestampNow, dropJobCache } from "./jobProgressCache.js";
+import { generateAcceptanceCriteria, splitRequirementUnitsWithWarnings } from "./requirementService.js";
 
 interface GenerationJobPayload {
   projectName: string;
   targetUrl: string;
   specification: string;
+  allowMutatingTests?: boolean;
   ownerUid?: string;
 }
 
@@ -27,7 +35,7 @@ interface GenerationJobUpdate {
   percentage?: number;
   message?: string;
   errorMessage?: string;
-  stage?: "discovery" | "planning" | "script" | "completed";
+  stage?: "analysis" | "discovery" | "planning" | "script" | "completed";
   caseCount?: number;
   completedCaseCount?: number;
   failedCaseCount?: number;
@@ -36,6 +44,11 @@ interface GenerationJobUpdate {
   coverageComplete?: boolean;
   coverageStopReason?: string;
   primaryGeneratedTest?: { id: string; title: string };
+  requirementUnits?: RequirementUnit[];
+  acceptanceCriteria?: AcceptanceCriterion[];
+  analysisWarnings?: string[];
+  coverageGaps?: Array<{ acId: string; reason: string }>;
+  analysisCompletedAt?: boolean;
   startedAt?: boolean;
   completedAt?: boolean;
 }
@@ -63,12 +76,13 @@ export const createGenerationJob = async (payload: GenerationJobPayload): Promis
     projectName: payload.projectName,
     targetUrl: payload.targetUrl,
     specification: payload.specification,
+    allowMutatingTests: payload.allowMutatingTests ?? false,
     ...(payload.ownerUid ? { ownerUid: payload.ownerUid } : {}),
     status: "pending",
     percentage: 0,
     message: "Waiting to start generation",
     errorMessage: "",
-    stage: "discovery",
+    stage: payload.specification.trim() ? "analysis" : "discovery",
     caseCount: 0,
     completedCaseCount: 0,
     failedCaseCount: 0,
@@ -110,14 +124,20 @@ export const updateGenerationJob = async (
   if (update.coverageComplete !== undefined) payload.coverageComplete = update.coverageComplete;
   if (update.coverageStopReason !== undefined) payload.coverageStopReason = update.coverageStopReason;
   if (update.primaryGeneratedTest !== undefined) payload.primaryGeneratedTest = update.primaryGeneratedTest;
+  if (update.requirementUnits !== undefined) payload.requirementUnits = update.requirementUnits;
+  if (update.acceptanceCriteria !== undefined) payload.acceptanceCriteria = update.acceptanceCriteria;
+  if (update.analysisWarnings !== undefined) payload.analysisWarnings = update.analysisWarnings;
+  if (update.coverageGaps !== undefined) payload.coverageGaps = update.coverageGaps;
   if (update.startedAt) payload.startedAt = FieldValue.serverTimestamp();
   if (update.completedAt) payload.completedAt = FieldValue.serverTimestamp();
+  if (update.analysisCompletedAt) payload.analysisCompletedAt = FieldValue.serverTimestamp();
 
   await db.collection("generationJobs").doc(jobId).update(payload);
   cacheJobPatch(jobId, {
     ...Object.fromEntries(Object.entries(payload).filter(([, value]) => cacheableFirestoreValue(value))),
     ...(update.startedAt ? { startedAt: cacheTimestampNow() } : {}),
     ...(update.completedAt ? { completedAt: cacheTimestampNow() } : {}),
+    ...(update.analysisCompletedAt ? { analysisCompletedAt: cacheTimestampNow() } : {}),
   });
 };
 
@@ -129,6 +149,8 @@ interface GenerationCaseProgress {
   type: "UI" | "API";
   testSteps: string[];
   expectedResult: string;
+  requirementIds?: string[];
+  category?: string;
   page: string;
   snapshotId?: string;
   status: "planned" | "generating" | "saved" | "failed";
@@ -163,6 +185,7 @@ export const findSnapshotForPage = <T extends { title: string }>(snapshots: T[],
 
 export const buildRetryTestPlan = (generationCase: Record<string, unknown>): TestPlan => {
   const sequence = Number(generationCase.sequence ?? 0);
+  const category = TEST_PLAN_CATEGORIES.find((candidate) => candidate === generationCase.category);
   const plan: TestPlan = {
     id: `TC-${String(sequence).padStart(3, "0")}`,
     title: String(generationCase.title ?? ""),
@@ -172,6 +195,10 @@ export const buildRetryTestPlan = (generationCase: Record<string, unknown>): Tes
       ? generationCase.testSteps.filter((step): step is string => typeof step === "string")
       : [],
     expectedResult: String(generationCase.expectedResult ?? ""),
+    requirementIds: Array.isArray(generationCase.requirementIds)
+      ? generationCase.requirementIds.filter((id): id is string => typeof id === "string")
+      : [],
+    ...(category ? { category } : {}),
   };
   if (!Number.isInteger(sequence) || sequence < 1 || !plan.title || !plan.description || plan.testSteps.length === 0 || !plan.expectedResult) {
     throw new Error("The stored Test plan is incomplete and cannot be retried");
@@ -272,6 +299,24 @@ const updateGenerationCaseFields = async (
   cacheCasePatch(jobId, caseId, { ...update });
 };
 
+const isAcceptanceCriterion = (value: unknown): value is AcceptanceCriterion => {
+  if (typeof value !== "object" || value == null) return false;
+  const criterion = value as Record<string, unknown>;
+  return typeof criterion.id === "string"
+    && typeof criterion.requirementRef === "string"
+    && typeof criterion.scenario === "string"
+    && typeof criterion.action === "string"
+    && typeof criterion.expected === "string"
+    && typeof criterion.mustNot === "string"
+    && typeof criterion.category === "string"
+    && typeof criterion.priority === "string"
+    && typeof criterion.verification === "string"
+    && typeof criterion.ambiguity === "string";
+};
+
+const getJobAcceptanceCriteria = (job: Record<string, unknown>): AcceptanceCriterion[] =>
+  Array.isArray(job.acceptanceCriteria) ? job.acceptanceCriteria.filter(isAcceptanceCriterion) : [];
+
 const generateAndSaveCaseScript = async (
   jobId: string,
   job: Record<string, unknown>,
@@ -298,6 +343,7 @@ const generateAndSaveCaseScript = async (
   const targetUrl = String(job.targetUrl ?? "");
   const projectName = String(job.projectName ?? targetUrl);
   const specification = String(job.specification ?? "");
+  const acceptanceCriteria = getJobAcceptanceCriteria(job);
   const accessibilitySnapshot = await getSnapshotForGenerationCase(jobId, job, generationCase);
   const plan = buildRetryTestPlan(generationCase);
   const generated = await generateSingleScript({
@@ -305,6 +351,7 @@ const generateAndSaveCaseScript = async (
     targetUrl,
     specification,
     accessibilitySnapshot,
+    acceptanceCriteria,
   }, plan, {
     ...options,
     debugContext: { jobId, stage: "script", planId: plan.id },
@@ -314,7 +361,7 @@ const generateAndSaveCaseScript = async (
     url: targetUrl,
     title: plan.title,
     type: plan.type,
-    criteria: [],
+    criteria: plan.requirementIds ?? [],
     script: generated.script,
     generationJobId: jobId,
     generationCaseId: caseId,
@@ -482,6 +529,10 @@ export const listGenerationJobCases = async (
       type: data.type,
       testSteps: data.testSteps,
       expectedResult: data.expectedResult,
+      requirementIds: Array.isArray(data.requirementIds)
+        ? data.requirementIds.filter((id): id is string => typeof id === "string")
+        : undefined,
+      category: data.category,
       page: data.page,
       snapshotId: data.snapshotId,
       status: data.status,
@@ -655,6 +706,7 @@ export const retryFailedGenerationCase = async (
     const targetUrl = String(job.targetUrl ?? "");
     const projectName = String(job.projectName ?? targetUrl);
     const specification = String(job.specification ?? "");
+    const acceptanceCriteria = getJobAcceptanceCriteria(job);
     const accessibilitySnapshot = await getSnapshotForGenerationCase(jobId, job, generationCase);
 
     const plan = buildRetryTestPlan(generationCase);
@@ -664,6 +716,7 @@ export const retryFailedGenerationCase = async (
       targetUrl,
       specification,
       accessibilitySnapshot,
+      acceptanceCriteria,
     }, plan, {
       ...options,
       debugContext: { jobId, stage: "script", planId: plan.id },
@@ -673,7 +726,7 @@ export const retryFailedGenerationCase = async (
       url: targetUrl,
       title: plan.title,
       type: plan.type,
-      criteria: [],
+      criteria: plan.requirementIds ?? [],
       script: generated.script,
       generationJobId: jobId,
       generationCaseId: caseId,
@@ -715,21 +768,110 @@ export const buildPlannedGenerationCase = (
   type: plan.type,
   testSteps: plan.testSteps,
   expectedResult: plan.expectedResult,
+  ...(plan.requirementIds ? { requirementIds: [...plan.requirementIds] } : {}),
+  ...(plan.category ? { category: plan.category } : {}),
   page,
   snapshotId,
   status: "planned",
 });
+
+interface CoverageGapSnapshot {
+  title: string;
+  snapshot: string;
+}
+
+export interface CoverageGap {
+  acId: string;
+  reason: "no matching page discovered" | "planner could not create a case";
+}
+
+const keywordSegmenter = new Intl.Segmenter("th", { granularity: "word" });
+
+const keywordSet = (text: string): Set<string> =>
+  new Set([...keywordSegmenter.segment(text.toLocaleLowerCase())]
+    .filter((segment) => segment.isWordLike && segment.segment.length > 1)
+    .map((segment) => segment.segment));
+
+export const findBestSnapshotForCriterion = <T extends CoverageGapSnapshot>(
+  criterion: AcceptanceCriterion,
+  snapshots: T[],
+): { snapshot?: T; overlap: number } => {
+  const criterionKeywords = keywordSet(`${criterion.scenario} ${criterion.action} ${criterion.expected}`);
+  let bestSnapshot: T | undefined;
+  let bestOverlap = 0;
+
+  for (const snapshot of snapshots) {
+    const snapshotKeywords = keywordSet(`${snapshot.title} ${snapshot.snapshot}`);
+    let overlap = 0;
+    for (const keyword of criterionKeywords) {
+      if (snapshotKeywords.has(keyword)) overlap += 1;
+    }
+    if (overlap > bestOverlap) {
+      bestSnapshot = snapshot;
+      bestOverlap = overlap;
+    }
+  }
+
+  return { snapshot: bestSnapshot, overlap: bestOverlap };
+};
+
+export const runCoverageGapPass = async <T extends CoverageGapSnapshot>(
+  criteria: AcceptanceCriterion[],
+  snapshots: T[],
+  coveredAcIds: Set<string>,
+  maxCases: number,
+  planForCriterion: (criterion: AcceptanceCriterion, snapshot: T) => Promise<TestPlan | undefined>,
+  persistPlan: (plan: TestPlan, snapshot: T) => Promise<boolean>,
+): Promise<CoverageGap[]> => {
+  const gaps: CoverageGap[] = [];
+  let generatedCaseAttempts = 0;
+  const safeMaxCases = Number.isInteger(maxCases) && maxCases > 0 ? maxCases : 0;
+
+  for (const criterion of criteria) {
+    if (criterion.priority !== "required" || criterion.verification !== "automated" || coveredAcIds.has(criterion.id)) {
+      continue;
+    }
+
+    const match = findBestSnapshotForCriterion(criterion, snapshots);
+    if (!match.snapshot || match.overlap === 0) {
+      gaps.push({ acId: criterion.id, reason: "no matching page discovered" });
+      continue;
+    }
+    if (generatedCaseAttempts >= safeMaxCases) {
+      gaps.push({ acId: criterion.id, reason: "planner could not create a case" });
+      continue;
+    }
+
+    generatedCaseAttempts += 1;
+    try {
+      const plan = await planForCriterion(criterion, match.snapshot);
+      if (plan) {
+        const accepted = await persistPlan(plan, match.snapshot);
+        if (accepted && (plan.requirementIds ?? []).includes(criterion.id)) {
+          coveredAcIds.add(criterion.id);
+          continue;
+        }
+      }
+    } catch (error) {
+      console.error(`Targeted planning failed for ${criterion.id}`, error);
+    }
+    gaps.push({ acId: criterion.id, reason: "planner could not create a case" });
+  }
+
+  return gaps;
+};
 
 export const processGenerateJob = async (
   jobId: string,
   payload: GenerationJobPayload,
   options: LlmGenerationOptions = {},
 ): Promise<void> => {
+  const hasSpecification = Boolean(payload.specification.trim());
   await updateGenerationJob(jobId, {
     status: "running",
     percentage: 0,
-    message: "Preparing generation",
-    stage: "discovery",
+    message: hasSpecification ? "Analyzing requirement specification" : "Preparing generation",
+    stage: hasSpecification ? "analysis" : "discovery",
     startedAt: true,
   });
 
@@ -740,9 +882,50 @@ export const processGenerateJob = async (
   let processedSnapshotCount = 0;
   let coverageStopReason = "";
   let lastJobFlush = 0;
+  let acceptanceCriteria: AcceptanceCriterion[] = [];
 
   try {
-    await updateGenerationJob(jobId, { message: "Building accessibility snapshot" });
+    if (hasSpecification) {
+      await updateGenerationJob(jobId, {
+        stage: "analysis",
+        percentage: 1,
+        message: "Splitting requirements and generating acceptance criteria",
+      });
+      const splitResult = splitRequirementUnitsWithWarnings(payload.specification);
+      const analysis = await generateAcceptanceCriteria(splitResult.units, payload.targetUrl, options);
+      acceptanceCriteria = analysis.criteria;
+      const analysisWarnings = [...splitResult.warnings, ...analysis.warnings];
+      let requirementUnits = splitResult.units;
+      const serializedAnalysisSize = () => Buffer.byteLength(JSON.stringify({
+        requirementUnits,
+        acceptanceCriteria: analysis.criteria,
+        analysisWarnings,
+      }), "utf8");
+
+      if (serializedAnalysisSize() > 700_000) {
+        requirementUnits = requirementUnits.map((unit) => ({
+          ...unit,
+          sourceText: unit.sourceText.slice(0, 500),
+        }));
+        analysisWarnings.push("Requirement source text was truncated to 500 characters to fit the job document.");
+      }
+
+      await updateGenerationJob(jobId, {
+        stage: "analysis",
+        percentage: 10,
+        message: `Requirement analysis complete: ${analysis.criteria.length} acceptance criterion/criteria`,
+        requirementUnits,
+        acceptanceCriteria: analysis.criteria,
+        analysisWarnings,
+        analysisCompletedAt: true,
+      });
+    }
+
+    await updateGenerationJob(jobId, {
+      stage: "discovery",
+      percentage: hasSpecification ? 10 : 0,
+      message: "Building accessibility snapshot",
+    });
     const discovery = await discoverAccessibilitySnapshot(payload.targetUrl, payload.specification, {
       maxSnapshots: env.generationJobMaxSnapshots,
       maxCandidates: env.generationJobMaxCandidates,
@@ -752,9 +935,10 @@ export const processGenerateJob = async (
     coverageStopReason = discovery.stopReason ?? "";
     const snapshots = discovery.snapshots;
     const snapshotIds = await persistGenerationJobSnapshots(jobId, snapshots);
+    const planningBasePercentage = hasSpecification ? 20 : 10;
     await updateGenerationJob(jobId, {
       stage: "planning",
-      percentage: 10,
+      percentage: planningBasePercentage,
       snapshotCount: snapshots.length,
       coverageComplete: false,
       coverageStopReason,
@@ -762,6 +946,7 @@ export const processGenerateJob = async (
     });
 
     const caseKeys = new Set<string>();
+    const coveredAcIds = new Set<string>();
     let planningStalled = false;
 
     for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
@@ -787,7 +972,10 @@ export const processGenerateJob = async (
           const progress = {
             stage: "planning" as const,
             caseCount,
-            percentage: Math.min(90, 10 + Math.floor((snapshotIndex / Math.max(snapshots.length, 1)) * 80)),
+            percentage: Math.min(
+              90,
+              planningBasePercentage + Math.floor((snapshotIndex / Math.max(snapshots.length, 1)) * (90 - planningBasePercentage)),
+            ),
             message: `Planned testcase ${caseCount}: ${caseProgress.title}`,
           };
           if (Date.now() - lastJobFlush > 5000) {
@@ -798,6 +986,9 @@ export const processGenerateJob = async (
           }
           return true;
         },
+        acceptanceCriteria,
+        coveredAcIds,
+        payload.allowMutatingTests ?? false,
       );
 
       if (planningResult.status === "incomplete") {
@@ -816,6 +1007,53 @@ export const processGenerateJob = async (
       });
     }
 
+    const coverageGaps = await runCoverageGapPass(
+      acceptanceCriteria,
+      snapshots,
+      coveredAcIds,
+      env.coverageGapMaxCases,
+      async (criterion, snapshot) => {
+        const result = await generateNextTestPlan(
+          {
+            projectName: payload.projectName,
+            targetUrl: payload.targetUrl,
+            specification: payload.specification,
+            accessibilitySnapshot: snapshot.snapshot,
+          },
+          snapshot.snapshot,
+          [],
+          { ...options, debugContext: { jobId, stage: "planner" } },
+          [criterion],
+          coveredAcIds,
+          `Plan exactly one case that verifies ${criterion.id}, or return status=done if this page cannot exercise it.`,
+          payload.allowMutatingTests ?? false,
+        );
+        if (result.status === "done") return undefined;
+        return sanitizePlanTraceability(result.plan, new Set([criterion.id]));
+      },
+      async (plan, snapshot) => {
+        const normalizedTitle = normalizeCaseTitle(plan.title);
+        if (!normalizedTitle || caseKeys.has(normalizedTitle)) return false;
+        caseKeys.add(normalizedTitle);
+        caseCount += 1;
+        const snapshotIndex = snapshots.indexOf(snapshot);
+        const caseProgress = buildPlannedGenerationCase(
+          plan,
+          caseCount,
+          snapshot.title,
+          snapshotIds[snapshotIndex],
+        );
+        await updateGenerationCase(jobId, caseProgress.id, caseProgress);
+        await updateGenerationJob(jobId, {
+          stage: "planning",
+          percentage: Math.min(95, 90 + caseCount),
+          caseCount,
+          message: `Targeted testcase ${caseCount}: ${caseProgress.title}`,
+        });
+        return true;
+      },
+    );
+
     const coverageComplete = discovery.complete && !planningStalled;
     const status = coverageComplete ? "completed" : "incomplete";
     const message = coverageComplete
@@ -831,6 +1069,7 @@ export const processGenerateJob = async (
       processedSnapshotCount,
       coverageComplete,
       coverageStopReason,
+      coverageGaps,
       message,
       errorMessage: coverageComplete
         ? ""

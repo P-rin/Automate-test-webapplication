@@ -11,6 +11,14 @@ interface StepState {
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
+const jobStageLabels: Record<string, string> = {
+  analysis: 'วิเคราะห์ Requirement',
+  discovery: 'กำลังสำรวจหน้าเว็บ',
+  planning: 'กำลังวางแผนทดสอบ',
+  script: 'กำลังสร้างสคริปต์ทดสอบ',
+  completed: 'เสร็จสิ้น',
+};
+
 interface GeneratedJobTest {
   id?: string;
   title?: string;
@@ -51,6 +59,7 @@ export default function SetupPage() {
   const { user } = useAuth();
   const [url, setUrl] = useState('https://example.com');
   const [requirementsText, setRequirementsText] = useState('');
+  const [allowMutatingTests, setAllowMutatingTests] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -163,6 +172,7 @@ export default function SetupPage() {
       formData.append('url', url);
       formData.append('projectName', projectName || url);
       formData.append('requirements', requirementsText.trim());
+      formData.append('allowMutatingTests', String(allowMutatingTests));
       files.forEach(f => formData.append('files', f));
       const idToken = await user.getIdToken();
 
@@ -383,6 +393,19 @@ export default function SetupPage() {
         />
       </div>
 
+      <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+        <input
+          type="checkbox"
+          checked={allowMutatingTests}
+          onChange={event => setAllowMutatingTests(event.target.checked)}
+          className="mt-0.5 rounded border-amber-400 text-amber-700 focus:ring-amber-600"
+        />
+        <span>
+          <span className="block font-medium">เว็บเป้าหมายเป็นสภาพแวดล้อมทดสอบ (อนุญาตให้ทดสอบขั้นตอนที่เปลี่ยนข้อมูล)</span>
+          <span className="mt-1 block text-xs text-amber-800">หากไม่เลือก ระบบจะหยุดที่หน้าสุดท้ายก่อนยืนยันการซื้อ ชำระเงิน ลบข้อมูล หรือเปลี่ยนบัญชี</span>
+        </span>
+      </label>
+
       {/* File Uploader */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">
         <label className="block text-sm font-medium text-gray-700">อัปโหลดไฟล์ความต้องการ (.md / .txt) (ไม่บังคับ)</label>
@@ -449,7 +472,7 @@ export default function SetupPage() {
           <div className="space-y-4 p-5">
             <div>
               <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-                <span className="font-medium text-gray-700">{jobStage || 'กำลังรอการประมวลผล'}</span>
+                <span className="font-medium text-gray-700">{jobStageLabels[jobStage] ?? (jobStage || 'กำลังรอการประมวลผล')}</span>
                 <span className="font-semibold tabular-nums text-blue-800">{Math.min(jobPercentage, 100)}%</span>
               </div>
               <div

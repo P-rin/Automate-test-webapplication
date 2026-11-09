@@ -28,6 +28,16 @@ const asList = (value: string | undefined): string[] => {
     .filter(Boolean);
 };
 
+const asPositiveInteger = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const asNonNegativeInteger = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 export const env = {
   port: Number(process.env.PORT ?? 4000),
   screenshotHost: process.env.SCREENSHOT_HOST ?? "localhost",
@@ -48,6 +58,9 @@ export const env = {
   ollamaNumCtx: Number(process.env.OLLAMA_NUM_CTX ?? 8192),
   ollamaKeepAlive: process.env.OLLAMA_KEEP_ALIVE ?? "5m",
   llmMaxPromptChars: Number(process.env.LLM_MAX_PROMPT_CHARS ?? 14000),
+  requirementMaxUnits: asPositiveInteger(process.env.REQUIREMENT_MAX_UNITS, 80),
+  requirementMaxCriteria: asPositiveInteger(process.env.REQUIREMENT_MAX_CRITERIA, 60),
+  coverageGapMaxCases: asPositiveInteger(process.env.COVERAGE_GAP_MAX_CASES, 10),
   playwrightExploreMaxSnapshots: Number(process.env.PLAYWRIGHT_EXPLORE_MAX_SNAPSHOTS ?? 8),
   playwrightExploreMaxCandidates: Number(process.env.PLAYWRIGHT_EXPLORE_MAX_CANDIDATES ?? 5),
   playwrightExploreMaxDepth: Number(process.env.PLAYWRIGHT_EXPLORE_MAX_DEPTH ?? 2),
@@ -63,6 +76,7 @@ export const env = {
   playwrightMcpCommand: process.env.PLAYWRIGHT_MCP_COMMAND,
   playwrightMcpArgs: asList(process.env.PLAYWRIGHT_MCP_ARGS),
   executionEngine: (process.env.EXECUTION_ENGINE ?? "playwright").toLowerCase(),
+  executionRetries: asNonNegativeInteger(process.env.EXECUTION_RETRIES, 1),
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 120000),
 };
 

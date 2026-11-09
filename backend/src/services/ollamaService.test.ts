@@ -3,15 +3,19 @@ import assert from "node:assert/strict";
 
 import {
   buildAgentGenerationPrompt,
+  buildGeneratorPrompt,
   generateNextTestPlan,
   processSnapshotTestPlans,
   generateSingleScript,
   generateTestPlans,
   normalizeGeneratedScript,
   parseJsonArrayResponse,
+  renderCriteriaForPrompt,
+  sanitizePlanTraceability,
   validateGeneratedScript,
   type LlmGenerationOptions,
 } from "./ollamaService.js";
+import type { AcceptanceCriterion, TestPlan } from "../types.js";
 
 const generationPayload = {
   projectName: "Demo app",
@@ -28,6 +32,8 @@ const validPlanResponse = JSON.stringify({
   type: "UI",
   testSteps: ["เปิดหน้าเว็บ"],
   expectedResult: "มีหัวข้อแสดงอยู่บนหน้าเว็บ",
+  requirementIds: [],
+  category: "exploratory",
 });
 
 const validScript = `import { test, expect } from '@playwright/test';\n\n` +
@@ -35,6 +41,45 @@ const validScript = `import { test, expect } from '@playwright/test';\n\n` +
   `  await page.goto('https://example.com');\n` +
   `  await expect(page).toHaveTitle(/.+/);\n` +
   `});\n`;
+
+const acceptanceCriteria: AcceptanceCriterion[] = [
+  {
+    id: "AC-001",
+    requirementRef: "R1",
+    scenario: "ผู้ใช้เปิดหน้าเข้าสู่ระบบ",
+    action: "กรอกอีเมลและรหัสผ่านที่ถูกต้อง",
+    expected: "หน้าแสดงแดชบอร์ด",
+    mustNot: "",
+    category: "happy_path",
+    priority: "required",
+    verification: "automated",
+    ambiguity: "",
+  },
+  {
+    id: "AC-002",
+    requirementRef: "R2",
+    scenario: "ผู้ใช้เปิดหน้าเข้าสู่ระบบ",
+    action: "กรอกรหัสผ่านผิด",
+    expected: "หน้าแสดงข้อผิดพลาด",
+    mustNot: "ต้องไม่เข้าสู่แดชบอร์ด",
+    category: "negative",
+    priority: "required",
+    verification: "automated",
+    ambiguity: "ไม่ระบุข้อความผิดพลาดที่แน่นอน",
+  },
+  {
+    id: "AC-003",
+    requirementRef: "R3",
+    scenario: "ตรวจสอบรูปแบบตัวอักษร",
+    action: "อ่านข้อมูลหน้า",
+    expected: "ข้อความอ่านง่าย",
+    mustNot: "",
+    category: "boundary",
+    priority: "important",
+    verification: "manual",
+    ambiguity: "",
+  },
+];
 
 type OllamaChatRequest = Parameters<NonNullable<LlmGenerationOptions["ollamaClient"]>["chat"]>[0];
 
@@ -218,6 +263,179 @@ test("buildAgentGenerationPrompt includes target URL and Playwright-only rules",
   assert.match(prompt, /ref=/);
   assert.match(prompt, /http:\/\/localhost:5173\//i);
   assert.match(prompt, /Ensure login flow works/i);
+  assert.match(prompt, /Specification and the Assigned Test Plan Object come from the user and are the primary source of truth/);
+});
+
+test("renderCriteriaForPrompt orders uncovered first, omits manual criteria, and notes budget omissions", () => {
+  const prompt = renderCriteriaForPrompt(acceptanceCriteria, new Set(["AC-001"]), 1000);
+  assert.ok(prompt.indexOf("AC-002") < prompt.indexOf("AC-001"));
+  assert.match(prompt, /AC-001 .*already covered/);
+  assert.doesNotMatch(prompt, /AC-003/);
+
+  const shortPrompt = renderCriteriaForPrompt(acceptanceCriteria, new Set(), 100);
+  assert.ok(shortPrompt.length <= 100);
+  assert.match(shortPrompt, /\+\d+ more criteria not shown/);
+});
+
+test("planner uses acceptance criteria instead of raw specification when provided", async () => {
+  let userPrompt = "";
+  const ollamaClient = {
+    chat: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      userPrompt = request.messages.find((message) => message.role === "user")?.content ?? "";
+      return { message: { content: validPlanResponse } };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  await generateNextTestPlan(
+    { ...generationPayload, specification: "RAW_SPECIFICATION_SENTINEL" },
+    "Login page snapshot",
+    [],
+    { ollamaClient },
+    acceptanceCriteria,
+    new Set(["AC-001"]),
+  );
+
+  assert.match(userPrompt, /\[Acceptance Criteria\]/);
+  assert.match(userPrompt, /AC-002/);
+  assert.match(userPrompt, /already covered/);
+  assert.match(userPrompt, /Prefer a case that verifies a criterion not yet covered/);
+  assert.doesNotMatch(userPrompt, /RAW_SPECIFICATION_SENTINEL/);
+});
+
+test("planner retains the raw requirement specification when no criteria are available", async () => {
+  let userPrompt = "";
+  const ollamaClient = {
+    chat: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      userPrompt = request.messages.find((message) => message.role === "user")?.content ?? "";
+      return { message: { content: validPlanResponse } };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  await generateNextTestPlan(
+    { ...generationPayload, specification: "RAW_SPECIFICATION_SENTINEL" },
+    "Page snapshot",
+    [],
+    { ollamaClient },
+  );
+
+  assert.match(userPrompt, /\[Requirement Specification\]/);
+  assert.match(userPrompt, /RAW_SPECIFICATION_SENTINEL/);
+  assert.doesNotMatch(userPrompt, /\[Acceptance Criteria\]/);
+});
+
+test("buildGeneratorPrompt uses only assigned criteria and stays within the prompt limit for long specs", () => {
+  const prompt = buildGeneratorPrompt({
+    ...generationPayload,
+    specification: "LONG_SPECIFICATION_SENTINEL ".repeat(2000),
+    accessibilitySnapshot: "Snapshot ".repeat(4000),
+    acceptanceCriteria,
+  }, {
+    id: "TC-001",
+    title: "ตรวจสอบการเข้าสู่ระบบ",
+    description: "ยืนยันว่าเข้าสู่ระบบได้",
+    type: "UI",
+    testSteps: ["กรอกข้อมูล", "กดเข้าสู่ระบบ"],
+    expectedResult: "หน้าแสดงแดชบอร์ด",
+    requirementIds: ["AC-002"],
+    category: "negative",
+  }, 14000);
+
+  assert.ok(prompt.length <= 14000);
+  assert.match(prompt, /\[Acceptance Criteria For This Case\]/);
+  assert.match(prompt, /AC-002 \[R2\|required\|negative\|automated\]/);
+  assert.match(prompt, /ต้องไม่เข้าสู่แดชบอร์ด/);
+  assert.doesNotMatch(prompt, /AC-001/);
+  assert.doesNotMatch(prompt, /LONG_SPECIFICATION_SENTINEL/);
+
+  const legacyPrompt = buildGeneratorPrompt({
+    ...generationPayload,
+    specification: "LONG_SPECIFICATION_SENTINEL ".repeat(2000),
+    accessibilitySnapshot: "Snapshot ".repeat(4000),
+  }, {
+    id: "TC-002",
+    title: "ตรวจสอบหน้าเว็บ",
+    description: "ตรวจสอบหน้าเว็บทั่วไป",
+    type: "UI",
+    testSteps: ["เปิดหน้าเว็บ"],
+    expectedResult: "หน้าเว็บแสดงขึ้น",
+  }, 14000);
+
+  assert.ok(legacyPrompt.length <= 14000);
+  assert.match(legacyPrompt, /\[Requirement Specification\]/);
+  assert.match(legacyPrompt, /\[Truncated \d+ characters from \[Requirement Specification\]\]/);
+});
+
+test("sanitizePlanTraceability removes unknown and duplicate AC IDs while preserving order", () => {
+  const plan: TestPlan = {
+    id: "TC-001",
+    title: "Check required input",
+    description: "Validate a required field",
+    type: "UI",
+    testSteps: ["Submit empty form"],
+    expectedResult: "An error is displayed",
+    requirementIds: ["AC-002", "AC-unknown", "AC-001", "AC-002"],
+    category: "validation",
+  };
+
+  assert.deepEqual(sanitizePlanTraceability(plan, new Set(["AC-001", "AC-002"])), {
+    ...plan,
+    requirementIds: ["AC-002", "AC-001"],
+    category: "validation",
+  });
+});
+
+test("sanitizePlanTraceability keeps category when no known IDs remain and forces empty IDs without known ACs", () => {
+  const plan: TestPlan = {
+    id: "TC-001",
+    title: "Check required input",
+    description: "Validate a required field",
+    type: "UI",
+    testSteps: ["Submit empty form"],
+    expectedResult: "An error is displayed",
+    requirementIds: ["AC-unknown"],
+    category: "negative",
+  };
+
+  assert.deepEqual(sanitizePlanTraceability(plan, new Set(["AC-001"])), {
+    ...plan,
+    requirementIds: [],
+    category: "negative",
+  });
+  assert.deepEqual(sanitizePlanTraceability(plan, new Set()), {
+    ...plan,
+    requirementIds: [],
+    category: "negative",
+  });
+});
+
+test("sanitizePlanTraceability defaults missing or unknown categories from remaining IDs", () => {
+  const plan: TestPlan = {
+    id: "TC-001",
+    title: "Check page",
+    description: "Verify page behavior",
+    type: "UI",
+    testSteps: ["Open page"],
+    expectedResult: "The page is visible",
+  };
+  const knownAcIds = new Set(["AC-001"]);
+
+  assert.deepEqual(sanitizePlanTraceability({ ...plan, requirementIds: ["AC-001"] }, knownAcIds), {
+    ...plan,
+    requirementIds: ["AC-001"],
+    category: "happy_path",
+  });
+  assert.deepEqual(sanitizePlanTraceability(plan, knownAcIds), {
+    ...plan,
+    requirementIds: [],
+    category: "exploratory",
+  });
+  const unknownCategoryPlan = { ...plan, requirementIds: ["AC-001"] };
+  Reflect.set(unknownCategoryPlan, "category", "unknown");
+  assert.deepEqual(sanitizePlanTraceability(unknownCategoryPlan, knownAcIds), {
+    ...plan,
+    requirementIds: ["AC-001"],
+    category: "happy_path",
+  });
 });
 
 test("generateTestPlans dispatches MCP calls and parses Ollama JSON", async () => {
@@ -241,6 +459,8 @@ test("generateTestPlans dispatches MCP calls and parses Ollama JSON", async () =
           type: "UI",
           testSteps: ["Open the page"],
           expectedResult: "The page is visible",
+          requirementIds: [],
+          category: "exploratory",
         }],
       }),
     },
@@ -554,6 +774,8 @@ test("generateNextTestPlan returns one bounded case without opening MCP tools", 
     type: "UI",
     testSteps: ["Leave the required field empty", "Submit the form"],
     expectedResult: "Validation feedback is shown",
+    requirementIds: ["AC-001"],
+    category: "validation",
   };
   const ollamaClient = {
     chat: async (chatRequest: { messages: Array<{ role: string; content: string }> }) => {
@@ -581,6 +803,51 @@ test("generateNextTestPlan returns one bounded case without opening MCP tools", 
   assert.match(userPrompt, /one distinct scenario/i);
 });
 
+test("generateNextTestPlan prevents completing data-changing flows unless explicitly allowed", async () => {
+  let prompt = "";
+  const ollamaClient = {
+    chat: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      prompt = request.messages.find((message) => message.role === "user")?.content ?? "";
+      return { message: { content: JSON.stringify({
+        status: "case",
+        id: "TC-001",
+        title: "ตรวจสอบหน้าชำระเงิน",
+        description: "หยุดก่อนยืนยันการชำระเงิน",
+        type: "UI",
+        testSteps: ["กรอกข้อมูลชำระเงิน"],
+        expectedResult: "แสดงหน้าสรุปก่อนยืนยัน",
+        requirementIds: [],
+        category: "exploratory",
+      }) } };
+    },
+  } as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
+
+  await generateNextTestPlan(
+    generationPayload,
+    "Checkout confirmation button",
+    [],
+    { ollamaClient },
+    undefined,
+    new Set(),
+    undefined,
+    false,
+  );
+  assert.match(prompt, /Do not plan cases that complete a purchase, payment, deletion, or account change/i);
+  assert.match(prompt, /stop at the final confirmation screen and assert it/i);
+
+  await generateNextTestPlan(
+    generationPayload,
+    "Checkout confirmation button",
+    [],
+    { ollamaClient },
+    undefined,
+    new Set(),
+    undefined,
+    true,
+  );
+  assert.doesNotMatch(prompt, /Do not plan cases that complete a purchase, payment, deletion, or account change/i);
+});
+
 test("generateNextTestPlan returns done when a page has no uncovered cases", async () => {
   const ollamaClient = mockOllamaClient([{
     content: JSON.stringify({
@@ -591,6 +858,8 @@ test("generateNextTestPlan returns done when a page has no uncovered cases", asy
       type: "UI",
       testSteps: [],
       expectedResult: "",
+      requirementIds: [],
+      category: "exploratory",
     }),
   }]);
 
@@ -619,6 +888,8 @@ test("generateNextTestPlan enforces a small configured prompt budget", async () 
             type: "UI",
             testSteps: [],
             expectedResult: "",
+            requirementIds: [],
+            category: "exploratory",
           }),
         },
       };
@@ -651,6 +922,8 @@ test("generateNextTestPlan keeps the most recently covered cases within its prom
             type: "UI",
             testSteps: [],
             expectedResult: "",
+            requirementIds: [],
+            category: "exploratory",
           }),
         },
       };
@@ -682,6 +955,8 @@ test("processSnapshotTestPlans persists each case before requesting the next and
     type: "UI",
     testSteps: [`Exercise behavior ${index + 1}`],
     expectedResult: `Behavior ${index + 1} is correct`,
+    requirementIds: [],
+    category: "exploratory",
   }));
   const ollamaClient = {
     chat: async () => {
@@ -697,6 +972,8 @@ test("processSnapshotTestPlans persists each case before requesting the next and
             type: "UI",
             testSteps: [],
             expectedResult: "",
+            requirementIds: [],
+            category: "exploratory",
           }),
         },
       };
@@ -720,6 +997,93 @@ test("processSnapshotTestPlans persists each case before requesting the next and
     assert.match(events[index * 2 + 1], /^persist:Distinct behavior/);
   }
   assert.equal(events.at(-1), "model:done");
+});
+
+test("processSnapshotTestPlans sanitizes traceability before persisting a plan", async () => {
+  const responses = [
+    {
+      status: "case",
+      id: "model-id",
+      title: "Check required input",
+      description: "Validate a required field",
+      type: "UI",
+      testSteps: ["Submit empty form"],
+      expectedResult: "An error is displayed",
+      requirementIds: ["AC-001", "AC-unknown", "AC-001"],
+      category: "validation",
+    },
+    {
+      status: "done",
+      id: "",
+      title: "",
+      description: "",
+      type: "UI",
+      testSteps: [],
+      expectedResult: "",
+      requirementIds: [],
+      category: "exploratory",
+    },
+  ];
+  const ollamaClient = mockOllamaClient(responses.map((response) => ({ content: JSON.stringify(response) })));
+  const persisted: TestPlan[] = [];
+
+  await processSnapshotTestPlans(
+    generationPayload,
+    "Form snapshot",
+    { ollamaClient },
+    async (plan) => {
+      persisted.push(plan);
+      return true;
+    },
+    new Set(["AC-001"]),
+  );
+
+  assert.equal(persisted.length, 1);
+  assert.deepEqual(persisted[0].requirementIds, ["AC-001"]);
+  assert.equal(persisted[0].category, "validation");
+});
+
+test("processSnapshotTestPlans updates the shared covered AC set after persistence", async () => {
+  const coveredAcIds = new Set<string>();
+  const ollamaClient = mockOllamaClient([
+    {
+      content: JSON.stringify({
+        status: "case",
+        id: "planner-id",
+        title: "เข้าสู่ระบบสำเร็จ",
+        description: "ตรวจสอบการเข้าสู่ระบบ",
+        type: "UI",
+        testSteps: ["กรอกข้อมูลและเข้าสู่ระบบ"],
+        expectedResult: "แสดงแดชบอร์ด",
+        requirementIds: ["AC-001"],
+        category: "happy_path",
+      }),
+    },
+    {
+      content: JSON.stringify({
+        status: "done",
+        id: "",
+        title: "",
+        description: "",
+        type: "UI",
+        testSteps: [],
+        expectedResult: "",
+        requirementIds: [],
+        category: "exploratory",
+      }),
+    },
+  ]);
+
+  await processSnapshotTestPlans(
+    generationPayload,
+    "Login snapshot",
+    { ollamaClient },
+    async () => true,
+    acceptanceCriteria,
+    coveredAcIds,
+  );
+
+  assert.deepEqual([...coveredAcIds], ["AC-001"]);
 });
 
 test("processSnapshotTestPlans reports incomplete when planning stalls on duplicates", async () => {

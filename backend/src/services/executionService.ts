@@ -7,27 +7,22 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { db, FieldValue } from "../lib/firestore.js";
 import { env } from "../config/env.js";
 import { getTestCasesByIds, updateTestCaseStatus } from "./testCaseService.js";
+import { parsePlaywrightReport } from "./executionReport.js";
+import type { PlaywrightTestOutcome } from "./executionReport.js";
 import type { ExecutionTestCase } from "./testCaseService.js";
 
 const runtimeRoot = path.resolve(process.cwd(), "runtime");
-const screenshotRoot = path.resolve(process.cwd(), "storage", "screenshots");
+const artifactRoots = {
+  screenshot: path.resolve(process.cwd(), "storage", "screenshots"),
+  video: path.resolve(process.cwd(), "storage", "videos"),
+  trace: path.resolve(process.cwd(), "storage", "traces"),
+} as const;
 
-interface PlaywrightJsonReport {
-  stats?: {
-    duration?: number;
-  };
-  suites?: Array<{
-    specs?: Array<{
-      tests?: Array<{
-        results?: Array<{
-          status?: string;
-          errors?: Array<{ message?: string; stack?: string }>;
-        }>;
-      }>;
-    }>;
-    suites?: Array<any>;
-  }>;
-}
+const artifactExtensions = new Map<string, "screenshot" | "video" | "trace">([
+  [".png", "screenshot"],
+  [".webm", "video"],
+  [".zip", "trace"],
+] as const);
 
 const buildRunnerFiles = async (runId: string, scripts: string[]): Promise<{ runDir: string; reportPath: string; outputDir: string }> => {
   const runDir = path.join(runtimeRoot, runId);
@@ -49,8 +44,10 @@ const buildRunnerFiles = async (runId: string, scripts: string[]): Promise<{ run
     "  timeout: 60_000,",
     "  use: {",
     "    screenshot: 'only-on-failure',",
+    "    video: 'retain-on-failure',",
     "    trace: 'retain-on-failure',",
     "  },",
+    `  retries: ${env.executionRetries},`,
     "  reporter: [['json', { outputFile: './report.json' }]],",
     "  outputDir: './test-results',",
     "});",
@@ -62,73 +59,17 @@ const buildRunnerFiles = async (runId: string, scripts: string[]): Promise<{ run
   return { runDir, reportPath, outputDir };
 };
 
-const countResultsRecursive = (suite: any): { passCount: number; failCount: number; errors: string[] } => {
-  let passCount = 0;
-  let failCount = 0;
-  const errors: string[] = [];
-
-  // Count results at current suite level
-  if (suite.specs) {
-    for (const spec of suite.specs) {
-      for (const test of spec.tests ?? []) {
-        for (const result of test.results ?? []) {
-          if (result.status === "passed") passCount += 1;
-          if (result.status === "failed" || result.status === "timedOut") {
-            failCount += 1;
-            for (const err of result.errors ?? []) {
-              if (err.message) errors.push(err.message);
-              else if (err.stack) errors.push(err.stack);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Recursively count results in nested suites
-  if (suite.suites) {
-    for (const nestedSuite of suite.suites) {
-      const nested = countResultsRecursive(nestedSuite);
-      passCount += nested.passCount;
-      failCount += nested.failCount;
-      errors.push(...nested.errors);
-    }
-  }
-
-  return { passCount, failCount, errors };
-};
-
-const parseReport = (report: PlaywrightJsonReport): { passCount: number; failCount: number; errors: string[]; duration: number } => {
-  let passCount = 0;
-  let failCount = 0;
-  const errors: string[] = [];
-
-  for (const suite of report.suites ?? []) {
-    const result = countResultsRecursive(suite);
-    passCount += result.passCount;
-    failCount += result.failCount;
-    errors.push(...result.errors);
-  }
-
-  return {
-    passCount,
-    failCount,
-    errors,
-    duration: report.stats?.duration ?? 0,
-  };
-};
-
-const collectPngFiles = async (dir: string): Promise<string[]> => {
+const collectArtifactFiles = async (dir: string): Promise<string[]> => {
   const found: string[] = [];
   const items = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
 
   for (const item of items) {
     const full = path.join(dir, item.name);
     if (item.isDirectory()) {
-      found.push(...(await collectPngFiles(full)));
+      found.push(...(await collectArtifactFiles(full)));
       continue;
     }
-    if (item.isFile() && item.name.toLowerCase().endsWith(".png")) {
+    if (item.isFile() && artifactExtensions.has(path.extname(item.name).toLowerCase())) {
       found.push(full);
     }
   }
@@ -136,27 +77,32 @@ const collectPngFiles = async (dir: string): Promise<string[]> => {
   return found;
 };
 
-const getScreenshotBaseUrl = (port: number): string => {
-  return `http://${env.screenshotHost}:${port}/static/screenshots`;
-};
+interface PublishedArtifacts {
+  screenshotUrls: string[];
+  videoUrls: string[];
+  traceUrls: string[];
+}
 
-const publishScreenshots = async (runId: string, outputDir: string, port: number): Promise<string[]> => {
-  const pngPaths = await collectPngFiles(outputDir);
-  if (!pngPaths.length) return [];
+const publishArtifacts = async (runId: string, files: string[], port: number): Promise<PublishedArtifacts> => {
+  const published: PublishedArtifacts = { screenshotUrls: [], videoUrls: [], traceUrls: [] };
+  for (const source of files) {
+    const extension = path.extname(source).toLowerCase();
+    const kind = artifactExtensions.get(extension);
+    if (!kind) continue;
 
-  const runShotDir = path.join(screenshotRoot, runId);
-  await fs.mkdir(runShotDir, { recursive: true });
-
-  const baseUrl = getScreenshotBaseUrl(port);
-  const links: string[] = [];
-  for (const source of pngPaths) {
-    const fileName = `${uuidv4()}.png`;
-    const destination = path.join(runShotDir, fileName);
+    const fileName = `${uuidv4()}${extension}`;
+    const destination = path.join(artifactRoots[kind], runId, fileName);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.copyFile(source, destination);
-    links.push(`${baseUrl}/${runId}/${fileName}`);
+
+    const publicType = kind === "screenshot" ? "screenshots" : `${kind}s`;
+    const publicUrl = `http://${env.screenshotHost}:${port}/static/${publicType}/${runId}/${fileName}`;
+    if (kind === "screenshot") published.screenshotUrls.push(publicUrl);
+    if (kind === "video") published.videoUrls.push(publicUrl);
+    if (kind === "trace") published.traceUrls.push(publicUrl);
   }
 
-  return links;
+  return published;
 };
 
 const runPlaywright = async (cwd: string, pattern?: string): Promise<{ stdout: string; stderr: string; code: number | null }> => {
@@ -193,10 +139,16 @@ const runPlaywright = async (cwd: string, pattern?: string): Promise<{ stdout: s
 interface TestCaseResult {
   testCaseId: string;
   passed: boolean;
+  outcome?: PlaywrightTestOutcome;
   errors: string[];
   duration: number;
   filePattern: string;
+  screenshotUrls?: string[];
+  videoUrl?: string;
+  traceUrl?: string;
 }
+
+export { countResultsRecursive } from "./executionReport.js";
 
 interface McpTraceEntry {
   timestamp: string;
@@ -1564,6 +1516,8 @@ const executeInBackground = async (
         isRunning: false,
         passCount: mcpResult.passCount,
         failCount: mcpResult.failCount,
+        flakyCount: 0,
+        skippedCount: 0,
         totalDuration: mcpResult.totalDuration,
         logs: mcpResult.combinedLogs,
         screenshotUrls: [],
@@ -1605,8 +1559,10 @@ const executeInBackground = async (
         "  timeout: 60_000,",
         "  use: {",
         "    screenshot: 'only-on-failure',",
+        "    video: 'retain-on-failure',",
         "    trace: 'retain-on-failure',",
         "  },",
+        `  retries: ${env.executionRetries},`,
         `  reporter: [['json', { outputFile: './report-${i + 1}.json' }]],`,
         "  outputDir: './test-results',",
         "});",
@@ -1616,34 +1572,54 @@ const executeInBackground = async (
       await fs.writeFile(path.join(runDir, "playwright.config.ts"), individualConfig, "utf-8");
 
       // Run this test file individually
+      const artifactsBefore = new Set(await collectArtifactFiles(outputDir));
       const runResult = await runPlaywright(runDir, filePattern);
       allLogs.push(`[${filePattern}]\n${runResult.stdout}`);
       if (runResult.stderr) allLogs.push(`STDERR: ${runResult.stderr}`);
 
       // Parse report for this test
       const rawReport = await fs.readFile(individualReportPath, "utf-8").catch(() => "{}");
-      const parsed = parseReport(JSON.parse(rawReport) as PlaywrightJsonReport);
+      const parsed = parsePlaywrightReport(JSON.parse(rawReport) as Parameters<typeof parsePlaywrightReport>[0]);
 
       totalDuration += parsed.duration;
       allErrors.push(...parsed.errors);
 
-      const passed = parsed.failCount === 0 && runResult.code === 0;
+      const outcome: PlaywrightTestOutcome = parsed.flakyCount > 0
+        ? "flaky"
+        : parsed.skippedCount > 0
+          ? "skipped"
+          : parsed.failCount > 0 || runResult.code !== 0
+            ? "failed"
+            : parsed.passCount > 0
+              ? "passed"
+              : "failed";
+      const published = await publishArtifacts(
+        runId,
+        (await collectArtifactFiles(outputDir)).filter((file) => !artifactsBefore.has(file)),
+        env.port,
+      );
       results.push({
         testCaseId,
-        passed,
+        passed: outcome === "passed",
+        outcome,
         errors: parsed.errors,
         duration: parsed.duration,
         filePattern,
+        screenshotUrls: published.screenshotUrls,
+        ...(published.videoUrls[0] ? { videoUrl: published.videoUrls[0] } : {}),
+        ...(published.traceUrls[0] ? { traceUrl: published.traceUrls[0] } : {}),
       });
     }
 
-    // Collect all screenshots
-    const screenshotUrls = await publishScreenshots(runId, outputDir, env.port);
-
     // Calculate aggregates
-    const passCount = results.filter((r) => r.passed).length;
-    const failCount = results.filter((r) => !r.passed).length;
-    const status = failCount > 0 ? "failed" : "completed";
+    const passCount = results.filter((result) => result.outcome === "passed").length;
+    const failCount = results.filter((result) => result.outcome === "failed").length;
+    const flakyCount = results.filter((result) => result.outcome === "flaky").length;
+    const skippedCount = results.filter((result) => result.outcome === "skipped").length;
+    const status = failCount > 0 || flakyCount > 0 ? "failed" : "completed";
+    const screenshotUrls = results.flatMap((result) => result.screenshotUrls ?? []);
+    const videoUrls = results.flatMap((result) => result.videoUrl ? [result.videoUrl] : []);
+    const traceUrls = results.flatMap((result) => result.traceUrl ? [result.traceUrl] : []);
 
     const combinedLogs = allLogs.join("\n").slice(0, 100_000);
 
@@ -1652,9 +1628,13 @@ const executeInBackground = async (
       isRunning: false,
       passCount,
       failCount,
+      flakyCount,
+      skippedCount,
       totalDuration,
       logs: combinedLogs,
       screenshotUrls,
+      videoUrls,
+      traceUrls,
       caseResults: results,
       mcpTrace: [],
       errorDetails: allErrors.join("\n").slice(0, 40_000),
@@ -1663,7 +1643,13 @@ const executeInBackground = async (
 
     // Update each test case with its individual result
     for (const result of results) {
-      const finalStatus = result.passed ? "pass" : "fail";
+      const finalStatus = result.outcome === "flaky"
+        ? "flaky"
+        : result.outcome === "passed"
+          ? "pass"
+          : result.outcome === "skipped"
+            ? "pending"
+            : "fail";
       await updateTestCaseStatus(result.testCaseId, finalStatus);
     }
   } catch (error) {
@@ -1726,9 +1712,13 @@ export const startExecution = async (
     isRunning: true,
     passCount: 0,
     failCount: 0,
+    flakyCount: 0,
+    skippedCount: 0,
     totalDuration: 0,
     logs: "Queued",
     screenshotUrls: [],
+    videoUrls: [],
+    traceUrls: [],
     caseResults: [],
     mcpTrace: [],
     engineRequested: resolution.engineRequested,

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
-import { Timestamp } from "../lib/firestore.js";
+import { db, Timestamp } from "../lib/firestore.js";
 import { buildLlmGenerationOptions, env } from "../config/env.js";
 import {
   createGithubSession,
@@ -30,6 +30,8 @@ import { readSpecFiles } from "../services/specReader.js";
 import { artifactToSavePayload, getTestCasesByIds, saveGeneratedTestCase, updateTestCaseScript } from "../services/testCaseService.js";
 import { isValidTargetUrl } from "../utils/project.js";
 import { readJobFromCache } from "../services/jobProgressCache.js";
+import { computeCoverage, renderCoverageMarkdown } from "../services/coverageService.js";
+import { TEST_PLAN_CATEGORIES, type AcceptanceCriterion, type RequirementUnit } from "../types.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 10 } });
 
@@ -57,6 +59,69 @@ const generateJobScriptsSchema = z.object({
     "caseIds must not contain duplicates",
   ),
 });
+
+const isAcceptanceCriterion = (value: unknown): value is AcceptanceCriterion => {
+  if (typeof value !== "object" || value == null) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.id === "string"
+    && typeof item.requirementRef === "string"
+    && typeof item.scenario === "string"
+    && typeof item.action === "string"
+    && typeof item.expected === "string"
+    && typeof item.mustNot === "string"
+    && typeof item.category === "string"
+    && TEST_PLAN_CATEGORIES.includes(item.category as (typeof TEST_PLAN_CATEGORIES)[number])
+    && item.category !== "exploratory"
+    && (item.priority === "required" || item.priority === "important" || item.priority === "optional")
+    && (item.verification === "automated" || item.verification === "manual")
+    && typeof item.ambiguity === "string";
+};
+
+const isRequirementUnit = (value: unknown): value is RequirementUnit => {
+  if (typeof value !== "object" || value == null) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.ref === "string" && typeof item.section === "string" && typeof item.sourceText === "string";
+};
+
+const getCoverageReportForJob = async (jobId: string, ownerUid: string) => {
+  const job = await getGenerationJob(jobId, ownerUid);
+  const [caseResult, testCaseSnapshot] = await Promise.all([
+    listGenerationJobCases(jobId),
+    db.collection("testCases").where("generationJobId", "==", jobId).get(),
+  ]);
+  const cases = caseResult.cases.map((item) => ({
+    id: String(item.id ?? ""),
+    title: String(item.title ?? ""),
+    status: String(item.status ?? ""),
+    ...(Array.isArray(item.requirementIds)
+      ? { requirementIds: item.requirementIds.filter((id): id is string => typeof id === "string") }
+      : {}),
+    ...(typeof item.category === "string" ? { category: item.category } : {}),
+    ...(typeof item.testCaseId === "string" ? { testCaseId: item.testCaseId } : {}),
+    ...(typeof item.page === "string" ? { page: item.page } : {}),
+  }));
+  const testCases = testCaseSnapshot.docs.map((document) => {
+    const data = document.data();
+    return {
+      id: document.id,
+      lastStatus: String(data.lastStatus ?? ""),
+      ...(typeof data.generationCaseId === "string" ? { generationCaseId: data.generationCaseId } : {}),
+    };
+  });
+  const criteria = Array.isArray(job.acceptanceCriteria) ? job.acceptanceCriteria.filter(isAcceptanceCriterion) : [];
+  const requirementUnits = Array.isArray(job.requirementUnits) ? job.requirementUnits.filter(isRequirementUnit) : [];
+  const gaps = Array.isArray(job.coverageGaps)
+    ? job.coverageGaps.filter((gap): gap is { acId: string; reason: string } =>
+      typeof gap === "object" && gap !== null
+      && typeof (gap as Record<string, unknown>).acId === "string"
+      && typeof (gap as Record<string, unknown>).reason === "string")
+    : [];
+  const analysisWarnings = Array.isArray(job.analysisWarnings)
+    ? job.analysisWarnings.filter((warning): warning is string => typeof warning === "string")
+    : [];
+
+  return computeCoverage(criteria, cases, testCases, gaps, requirementUnits, analysisWarnings);
+};
 
 const updateScriptSchema = z.object({
   testCaseId: z.string().min(1),
@@ -261,6 +326,26 @@ apiRouter.post("/v2/generation-jobs/:jobId/cases/:caseId/retry", requireFirebase
   }
 });
 
+apiRouter.get("/v2/generation-jobs/:jobId/coverage", requireFirebaseAuth, async (req, res) => {
+  try {
+    const report = await getCoverageReportForJob(req.params.jobId, getFirebaseUid(res));
+    return res.json(report);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(message === "Generation job not found" ? 404 : 500).json({ error: message });
+  }
+});
+
+apiRouter.get("/v2/generation-jobs/:jobId/coverage.md", requireFirebaseAuth, async (req, res) => {
+  try {
+    const report = await getCoverageReportForJob(req.params.jobId, getFirebaseUid(res));
+    return res.type("text/markdown").send(renderCoverageMarkdown(report));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(message === "Generation job not found" ? 404 : 500).json({ error: message });
+  }
+});
+
 apiRouter.get("/v2/generation-jobs/:jobId", requireFirebaseAuth, async (req, res) => {
   try {
     const rawCursor = typeof req.query.since === "string" ? req.query.since : "";
@@ -379,6 +464,7 @@ apiRouter.post("/generate-job", requireFirebaseAuth, upload.array("files"), asyn
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
     const inlineRequirements = String(req.body.requirements ?? "").trim();
+    const allowMutatingTests = req.body.allowMutatingTests === true || req.body.allowMutatingTests === "true";
 
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
@@ -392,6 +478,7 @@ apiRouter.post("/generate-job", requireFirebaseAuth, upload.array("files"), asyn
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      allowMutatingTests,
       ownerUid: getFirebaseUid(res),
     });
 
@@ -399,6 +486,7 @@ apiRouter.post("/generate-job", requireFirebaseAuth, upload.array("files"), asyn
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      allowMutatingTests,
     }, buildLlmGenerationOptions());
 
     return res.status(202).json({ jobId, status: "accepted" });
@@ -413,6 +501,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
     const inlineRequirements = String(req.body.requirements ?? "").trim();
+    const allowMutatingTests = req.body.allowMutatingTests === true || req.body.allowMutatingTests === "true";
 
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
@@ -426,6 +515,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      allowMutatingTests,
       ownerUid: getFirebaseUid(res),
     });
 
@@ -433,6 +523,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      allowMutatingTests,
     }, buildLlmGenerationOptions());
 
     return res.status(202).json({
@@ -459,6 +550,7 @@ apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), asy
     const targetUrl = String(req.body.url ?? "");
     const projectName = String(req.body.projectName ?? targetUrl);
     const inlineRequirements = String(req.body.requirements ?? "").trim();
+    const allowMutatingTests = req.body.allowMutatingTests === true || req.body.allowMutatingTests === "true";
 
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
@@ -472,6 +564,7 @@ apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), asy
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      allowMutatingTests,
       ownerUid: getFirebaseUid(res),
     });
 
@@ -479,6 +572,7 @@ apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), asy
       projectName,
       targetUrl,
       specification: effectiveSpecification,
+      allowMutatingTests,
     }, buildLlmGenerationOptions());
 
     return res.status(202).json({
@@ -561,9 +655,13 @@ apiRouter.get("/v2/test-runs/:runId", async (req, res) => {
       testCaseIds: run.testCaseIds,
       passCount: run.passCount,
       failCount: run.failCount,
+      flakyCount: run.flakyCount ?? 0,
+      skippedCount: run.skippedCount ?? 0,
       totalDuration: run.totalDuration,
       logs: run.logs,
       screenshotUrls: run.screenshotUrls,
+      videoUrls: run.videoUrls ?? [],
+      traceUrls: run.traceUrls ?? [],
       errorDetails: run.errorDetails,
       caseResults: run.caseResults,
       engineRequested: run.engineRequested,

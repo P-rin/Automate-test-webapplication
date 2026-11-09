@@ -33,7 +33,7 @@ export default function DashboardPage() {
   const totalRuns = testRuns.length;
   const successRate = totalRuns > 0
     ? Math.round((testRuns.reduce((acc, r) => acc + r.passCount, 0) /
-        testRuns.reduce((acc, r) => acc + r.passCount + r.failCount, 1)) * 100)
+        testRuns.reduce((acc, r) => acc + r.passCount + r.failCount + (r.flakyCount ?? 0), 1)) * 100)
     : 0;
 
   const statusColor = (status: string) => {
@@ -93,7 +93,7 @@ export default function DashboardPage() {
                 <tr className="bg-gray-50 text-gray-500 text-left">
                   <th className="px-5 py-3 font-medium">โปรเจค</th>
                   <th className="px-5 py-3 font-medium">สถานะ</th>
-                  <th className="px-5 py-3 font-medium">Pass/Fail</th>
+                  <th className="px-5 py-3 font-medium">ผลการทดสอบ</th>
                   <th className="px-5 py-3 font-medium">วันเวลา</th>
                   <th className="px-5 py-3 font-medium">รายละเอียด</th>
                 </tr>
@@ -111,9 +111,13 @@ export default function DashboardPage() {
                       <span className="text-green-600 font-medium">{run.passCount} ผ่าน</span>
                       {' / '}
                       <span className="text-red-500 font-medium">{run.failCount} ไม่ผ่าน</span>
+                      {' / '}
+                      <span className="text-amber-600 font-medium">{run.flakyCount ?? 0} ไม่เสถียร</span>
                     </td>
                     <td className="px-5 py-3 text-gray-500">
-                      {run.startedAt ? new Date((run.startedAt as any).seconds * 1000).toLocaleString('th-TH') : '-'}
+                      {run.startedAt
+                        ? (run.startedAt instanceof Date ? run.startedAt : run.startedAt.toDate()).toLocaleString('th-TH')
+                        : '-'}
                     </td>
                     <td className="px-5 py-3">
                       <Link to={`/report/${run.id}`} className="text-blue-500 hover:underline text-xs">

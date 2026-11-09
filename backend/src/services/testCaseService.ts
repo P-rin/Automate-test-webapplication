@@ -57,7 +57,7 @@ export const getTestCasesByIds = async (ids: string[]) => {
 
 export const updateTestCaseStatus = async (
   testCaseId: string,
-  status: "pass" | "fail" | "running" | "pending",
+  status: "pass" | "fail" | "flaky" | "running" | "pending",
 ): Promise<void> => {
   await db.collection("testCases").doc(testCaseId).update({
     lastStatus: status,

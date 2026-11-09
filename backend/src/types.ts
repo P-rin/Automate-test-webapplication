@@ -1,6 +1,6 @@
 export type TestCaseKind = "UI" | "API";
 
-export type TestCaseStatus = "pass" | "fail" | "pending" | "running";
+export type TestCaseStatus = "pass" | "fail" | "flaky" | "pending" | "running";
 
 export interface StoredTestCase {
   id: string;
@@ -21,6 +21,17 @@ export interface GeneratedArtifact {
   script: string;
 }
 
+export const TEST_PLAN_CATEGORIES = [
+  "happy_path",
+  "validation",
+  "negative",
+  "boundary",
+  "access_control",
+  "exploratory",
+] as const;
+
+export type TestPlanCategory = typeof TEST_PLAN_CATEGORIES[number];
+
 export interface TestPlan {
   id: string;
   title: string;
@@ -28,6 +39,28 @@ export interface TestPlan {
   type: TestCaseKind;
   testSteps: string[];
   expectedResult: string;
+  /** AC IDs (e.g. "AC-003") this plan verifies; [] for exploratory cases. */
+  requirementIds?: string[];
+  category?: TestPlanCategory;
+}
+
+export interface RequirementUnit {
+  ref: string;
+  section: string;
+  sourceText: string;
+}
+
+export interface AcceptanceCriterion {
+  id: string;
+  requirementRef: string;
+  scenario: string;
+  action: string;
+  expected: string;
+  mustNot: string;
+  category: Exclude<TestPlanCategory, "exploratory">;
+  priority: "required" | "important" | "optional";
+  verification: "automated" | "manual";
+  ambiguity: string;
 }
 
 export interface GeneratedTestCase {

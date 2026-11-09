@@ -52,6 +52,10 @@ Environment keys:
 - `OLLAMA_NUM_CTX` = Ollama context window size (default `8192`)
 - `OLLAMA_KEEP_ALIVE` = duration to keep the active model loaded (default `5m`)
 - `LLM_MAX_PROMPT_CHARS` = maximum planner prompt size
+- `REQUIREMENT_MAX_UNITS` = maximum requirement units extracted per generation job (default `80`)
+- `REQUIREMENT_MAX_CRITERIA` = maximum acceptance criteria retained per generation job (default `60`)
+- `COVERAGE_GAP_MAX_CASES` = maximum targeted test cases generated for uncovered required criteria per job (default `10`)
+- `EXECUTION_RETRIES` = Playwright retries for failed tests (default `1`); tests that pass only after retry are reported as flaky
 - `COPILOT_API_URL` and `COPILOT_MODEL` = used only by the separate GitHub OAuth entitlement check
 - `PLAYWRIGHT_EXPLORE_MAX_SNAPSHOTS` = max number of snapshots to collect during MCP exploration
 - `PLAYWRIGHT_EXPLORE_MAX_CANDIDATES` = max number of clickable candidates to explore after the base snapshot
@@ -70,10 +74,11 @@ Default backend URL: `http://localhost:4000`.
 ## Notes
 
 - Text data (scripts, logs, status) are stored in Firestore.
-- Screenshot evidence stays on local disk at `backend/storage/screenshots` and is exposed by Express static middleware.
+- Screenshot, video, and trace evidence stays on local disk at `backend/storage/screenshots`, `backend/storage/videos`, and `backend/storage/traces`, served by Express static middleware.
 - Accessibility snapshots are collected through Playwright MCP (`@playwright/mcp`) from the backend service.
 - Ollama performs planner and script-generation passes and can call an allowlisted set of Playwright MCP tools with a bounded number of calls.
 - Generation now uses multi-step MCP exploration rather than a single snapshot: initial page, credential-driven login attempt when credentials are found in uploaded specs, then additional navigation snapshots from important buttons/links.
+- Generation jobs default to safe planning: the planner stops at confirmation screens for purchases, payments, deletions, and account changes unless `allowMutatingTests` is explicitly enabled for a test environment.
 - Backend can be configured with environment variables to control MCP startup:
   - `PLAYWRIGHT_MCP_COMMAND` — custom command to launch MCP server (default `playwright-mcp`, `npx` is blocked)
   - `PLAYWRIGHT_MCP_ARGS` — optional CLI args array for the MCP command
