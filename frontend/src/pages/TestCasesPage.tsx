@@ -97,13 +97,21 @@ const toMillis = (value: unknown): number => {
   if (!value) return 0;
   if (value instanceof Date) return value.getTime();
 
-  const asTimestamp = value as { seconds?: number; nanoseconds?: number; toDate?: () => Date };
+  const asTimestamp = value as {
+    seconds?: number;
+    nanoseconds?: number;
+    _seconds?: number;
+    _nanoseconds?: number;
+    toDate?: () => Date;
+  };
   if (typeof asTimestamp.toDate === 'function') {
     return asTimestamp.toDate().getTime();
   }
-  if (typeof asTimestamp.seconds === 'number') {
-    const nanos = typeof asTimestamp.nanoseconds === 'number' ? asTimestamp.nanoseconds : 0;
-    return asTimestamp.seconds * 1000 + Math.floor(nanos / 1_000_000);
+  const seconds = asTimestamp.seconds ?? asTimestamp._seconds;
+  if (typeof seconds === 'number') {
+    const nanoseconds = asTimestamp.nanoseconds ?? asTimestamp._nanoseconds;
+    const nanos = typeof nanoseconds === 'number' ? nanoseconds : 0;
+    return seconds * 1000 + Math.floor(nanos / 1_000_000);
   }
 
   return 0;
@@ -125,6 +133,7 @@ export default function TestCasesPage() {
   const [selectedPlanCaseIds, setSelectedPlanCaseIds] = useState<string[]>([]);
   const [generatingJobIds, setGeneratingJobIds] = useState<string[]>([]);
   const [generationActionMessage, setGenerationActionMessage] = useState('');
+  const [expandedTestCaseIds, setExpandedTestCaseIds] = useState<Set<string>>(() => new Set());
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingCase, setEditingCase] = useState<TestCase | null>(null);
@@ -217,16 +226,27 @@ export default function TestCasesPage() {
 
   const allProjects = useMemo(() => {
     const projectMap = new Map(projects.map(project => [project.id, project]));
+    const generationJobProjects = new Map<string, Project>();
+
     generationJobs.forEach(job => {
-      if (!projectMap.has(job.projectId)) {
-        projectMap.set(job.projectId, {
+      const createdAt = toMillis(job.createdAt);
+      if (createdAt <= 0) return;
+
+      const existing = projectMap.get(job.projectId);
+      const existingJobProject = generationJobProjects.get(job.projectId);
+
+      if (!existingJobProject || createdAt > existingJobProject.createdAt.getTime()) {
+        generationJobProjects.set(job.projectId, {
           id: job.projectId,
-          name: job.projectName,
-          url: job.targetUrl,
-          createdAt: new Date(toMillis(job.createdAt)),
+          name: existing?.name ?? job.projectName,
+          url: existing?.url || job.targetUrl,
+          createdAt: new Date(createdAt),
         });
       }
     });
+
+    generationJobProjects.forEach(project => projectMap.set(project.id, project));
+
     return Array.from(projectMap.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }, [projects, generationJobs]);
 
@@ -459,6 +479,8 @@ export default function TestCasesPage() {
                       {job.cases.map(testCase => {
                         const isEligible = (testCase.status === 'planned' || testCase.status === 'failed') && testCase.retryStatus !== 'running';
                         const isSelected = selectedPlanCaseIds.includes(`${job.id}:${testCase.id}`);
+                        const detailsId = `${job.id}:${testCase.id}-details`;
+                        const areDetailsExpanded = expandedTestCaseIds.has(detailsId);
                         const stateClass = testCase.retryStatus === 'running' || testCase.status === 'generating'
                           ? 'text-blue-700'
                           : testCase.status === 'saved'
@@ -489,17 +511,48 @@ export default function TestCasesPage() {
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                                 <span className="text-sm font-medium text-gray-800">{testCase.sequence}. {testCase.title}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedTestCaseIds(previous => {
+                                    const next = new Set(previous);
+                                    if (next.has(detailsId)) next.delete(detailsId);
+                                    else next.add(detailsId);
+                                    return next;
+                                  })}
+                                  aria-label={`${areDetailsExpanded ? 'ซ่อน' : 'แสดง'}ขั้นตอนและผลที่คาดหวัง: ${testCase.title}`}
+                                  aria-expanded={areDetailsExpanded}
+                                  aria-controls={detailsId}
+                                  title={`${areDetailsExpanded ? 'ซ่อน' : 'แสดง'}ขั้นตอนและผลที่คาดหวัง`}
+                                  className="inline-flex items-center text-gray-500 transition-colors hover:text-blue-700"
+                                >
+                                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+                                    {areDetailsExpanded ? (
+                                      <>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M10.6 10.6a2 2 0 002.8 2.8" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.9 5.2A10.7 10.7 0 0112 5c5 0 8.3 4.5 9 7-.2.8-.8 1.8-1.6 2.8M6.2 6.2C3.9 7.7 2.4 10 2 12c.5 2.5 4 7 10 7 1.2 0 2.3-.2 3.3-.6" />
+                                      </>
+                                    ) : (
+                                      <>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                      </>
+                                    )}
+                                  </svg>
+                                </button>
                                 <span className={`text-xs font-medium ${stateClass}`}>{stateLabel}</span>
                                 <span className="text-xs text-gray-500">{testCase.type}</span>
                               </div>
                               <p className="mt-1 text-xs text-gray-500">{testCase.page}</p>
                               <p className="mt-2 text-sm text-gray-700">{testCase.description}</p>
-                              {testCase.testSteps.length > 0 && (
-                                <ol className="mt-2 list-inside list-decimal space-y-1 text-xs text-gray-600">
-                                  {testCase.testSteps.map((step, index) => <li key={`${testCase.id}-step-${index}`}>{step}</li>)}
-                                </ol>
-                              )}
-                              <p className="mt-2 text-xs text-gray-600"><span className="font-medium">ผลที่คาดหวัง:</span> {testCase.expectedResult}</p>
+                              <div id={detailsId} hidden={!areDetailsExpanded} className="mt-2">
+                                {testCase.testSteps.length > 0 && (
+                                  <ol className="list-inside list-decimal space-y-1 text-xs text-gray-600">
+                                    {testCase.testSteps.map((step, index) => <li key={`${testCase.id}-step-${index}`}>{step}</li>)}
+                                  </ol>
+                                )}
+                                <p className="mt-2 text-xs text-gray-600"><span className="font-medium">ผลที่คาดหวัง:</span> {testCase.expectedResult}</p>
+                              </div>
                               {testCase.testCaseId && <p className="mt-1 text-xs text-gray-500">Test Script ID: {testCase.testCaseId}</p>}
                               {testCase.errorMessage && <p className="mt-1 text-xs text-red-700">{testCase.errorMessage}</p>}
                               {testCase.retryErrorMessage && <p className="mt-1 text-xs text-red-700">ลองใหม่ล่าสุดไม่สำเร็จ: {testCase.retryErrorMessage}</p>}
