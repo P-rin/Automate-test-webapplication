@@ -30,7 +30,7 @@ cp .env.example .env
 Fill Firebase Admin credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`). Start Ollama on the backend host and pull both configured models:
 
 ```bash
-ollama pull qwen3.5:4b
+ollama pull qwen3.5:9b
 ollama pull qwen2.5-coder:7b
 ```
 
@@ -46,7 +46,7 @@ Environment keys:
 
 - `OLLAMA_BASE_URL` = Ollama server URL (default `http://localhost:11434`)
 - `OLLAMA_MODEL` = generation model (default `qwen2.5-coder:7b`)
-- `OLLAMA_PLANNER_MODEL` = test-case planning model (default `qwen3.5:4b`)
+- `OLLAMA_PLANNER_MODEL` = test-case planning model (default `qwen3.5:9b`)
 - `OLLAMA_SCRIPT_MODEL` = Playwright script-generation model (default `qwen2.5-coder:7b`)
 - `OLLAMA_PLANNER_THINK` = enable thinking on planner requests (`false` by default)
 - `OLLAMA_NUM_CTX` = Ollama context window size (default `8192`)

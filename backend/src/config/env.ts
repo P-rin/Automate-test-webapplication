@@ -42,7 +42,7 @@ export const env = {
   copilotModel: process.env.COPILOT_MODEL ?? "gpt-4.1",
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
   ollamaModel: process.env.OLLAMA_MODEL ?? "qwen2.5-coder:7b",
-  ollamaPlannerModel: process.env.OLLAMA_PLANNER_MODEL ?? process.env.OLLAMA_MODEL ?? "qwen3.5:4b",
+  ollamaPlannerModel: process.env.OLLAMA_PLANNER_MODEL ?? process.env.OLLAMA_MODEL ?? "qwen3.5:9b",
   ollamaScriptModel: process.env.OLLAMA_SCRIPT_MODEL ?? process.env.OLLAMA_MODEL ?? "qwen2.5-coder:7b",
   ollamaPlannerThink: asBool(process.env.OLLAMA_PLANNER_THINK, false),
   ollamaNumCtx: Number(process.env.OLLAMA_NUM_CTX ?? 8192),

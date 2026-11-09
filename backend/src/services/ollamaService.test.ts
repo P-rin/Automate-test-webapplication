@@ -322,7 +322,7 @@ test("planner and script stages use their stage defaults when no model is config
     expectedResult: "มีหัวข้อแสดงอยู่บนหน้าเว็บ",
   }, options);
 
-  assert.deepEqual(requests.map((request) => request.model), ["qwen3.5:4b", "qwen2.5-coder:7b"]);
+  assert.deepEqual(requests.map((request) => request.model), ["qwen3.5:9b", "qwen2.5-coder:7b"]);
 });
 
 test("think is sent only to planner when enabled, alongside shared Ollama settings", async () => {

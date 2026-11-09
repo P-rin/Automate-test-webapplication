@@ -597,7 +597,7 @@ const callOllamaModel = async (
 
 const createRunContext = (options: LlmGenerationOptions, stage: "planner" | "script") => {
   const model = stage === "planner"
-    ? options.plannerModel ?? options.ollamaModel ?? "qwen3.5:4b"
+    ? options.plannerModel ?? options.ollamaModel ?? "qwen3.5:9b"
     : options.scriptModel ?? options.ollamaModel ?? "qwen2.5-coder:7b";
   const debugContext = options.debugContext
     ? { ...options.debugContext, stage, model }
