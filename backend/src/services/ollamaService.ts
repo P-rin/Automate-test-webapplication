@@ -72,6 +72,11 @@ const buildScriptPreview = (script: string, maxChars = 200): string => {
 export interface LlmGenerationOptions {
   ollamaHost?: string;
   ollamaModel?: string;
+  plannerModel?: string;
+  scriptModel?: string;
+  plannerThink?: boolean;
+  numCtx?: number;
+  keepAlive?: string;
   maxPromptChars?: number;
   usePlaywrightTools?: boolean;
   ollamaClient?: Pick<Ollama, "chat">;
@@ -166,6 +171,10 @@ export const validateGeneratedScript = (script: string): void => {
 
   if (/\bref\s*=/.test(trimmedScript)) {
     throw new Error("Generated script must not use snapshot reference selectors.");
+  }
+
+  if (/\bpage\.waitFor(?:Timeout|Selector)\s*\(|\bpage\.\$\$?\s*\(/.test(trimmedScript)) {
+    throw new Error("Generated script must not use page.waitForTimeout(), page.waitForSelector(), page.$(), or page.$$().");
   }
 
   const stack: string[] = [];
@@ -304,6 +313,9 @@ const buildPlannerPrompt = (payload: CopilotRequest, maxPromptChars: number): st
     "5. EFFICIENCY RULE: For simple screens (e.g., splash screen, static display), keep the scenarios concise and avoid generating redundant or low-value cases.",
     "6. ISOLATION RULE: Each test plan MUST represent exactly ONE distinct scenario (e.g., Happy Path, Invalid Password, Empty Fields). DO NOT combine positive and negative flows into a single plan.",
     "7. MANDATORY LOGIN STEP: For any scenario requiring user authentication or a new session, explicitly include the Login steps (Navigate to login -> Enter credentials -> Click login) as the initial steps in `testSteps`.",
+    "8. TEST DESIGN: Apply equivalence partitioning and boundary value analysis. For inputs, include relevant negative and validation cases such as zero, negative values, values above stock, and empty required fields.",
+    "9. THAI TEXT: Write `title`, `description`, every `testSteps` item, and `expectedResult` in Thai. Keep UI labels, element names, and URLs exactly as they appear in the accessibility snapshot.",
+    "10. OBSERVABLE RESULTS: Every `expectedResult` must be observable and verifiable, such as visible text, URL, element count, or enabled/disabled state. Avoid vague statements such as \"works correctly\".",
     "",
     "[OUTPUT FORMAT]",
     "Output ONLY a valid JSON object (not an array).",
@@ -315,11 +327,11 @@ const buildPlannerPrompt = (payload: CopilotRequest, maxPromptChars: number): st
     "  \"plans\": [",
     "    {",
     "      \"id\": \"TC-001\",",
-    "      \"title\": \"concise Thai/English mixed title\",",
-    "      \"description\": \"Detailed explanation\",",
+    "      \"title\": \"ชื่อกรณีทดสอบภาษาไทย\",",
+    "      \"description\": \"คำอธิบายภาษาไทย\",",
     "      \"type\": \"UI\",",
-    "      \"testSteps\": [\"step 1\", \"step 2\"],",
-    "      \"expectedResult\": \"what should happen\"",
+    "      \"testSteps\": [\"ขั้นตอนที่ 1\", \"ขั้นตอนที่ 2\"],",
+    "      \"expectedResult\": \"ผลลัพธ์ที่สังเกตและตรวจสอบได้\"",
     "    }",
     "  ]",
     "}",
@@ -348,11 +360,13 @@ const buildGeneratorPrompt = (payload: CopilotRequest, plannedCase: TestPlan, ma
     "2. Put every browser action inside test('<name matching the actual scenario>', async ({ page }) => { ... }). Use only this fixture page, or locators obtained from it.",
     "3. Navigate with await page.goto(...). Fill fields with await page.fill(selector, value) or locator.fill(value), and click with await page.click(selector) or locator.click().",
     "4. Never output an identifier beginning with browser_ (including any MCP tool name). Never use ref= or snapshot reference IDs in selectors; those references do not exist in the DOM.",
-    "5. Prefer locators in this order: page.getByRole(), page.getByLabel(), page.getByPlaceholder(), page.getByText(), then a CSS selector based on a real DOM attribute such as input[name=\"email\"] or button[type=\"submit\"].",
+    "5. Prefer page.getByRole(), page.getByLabel(), page.getByPlaceholder(), and page.getByText() locators. Use web-first expect(...) assertions.",
     "6. Do not call any function that is not imported or defined in this same file. Keep the test self-contained and use Playwright Test APIs.",
     "7. If login is required, read credentials only from process.env.TEST_EMAIL and process.env.TEST_PASSWORD. Never hardcode an email or password.",
     "8. Verify each important step with Playwright expect assertions such as toBeVisible(), toHaveURL(), toHaveText(), or toHaveCount(). Do not use toHaveTitle() to identify a page unless the relevant pages are known to have different titles.",
     "9. Generate exactly one independent test for the assigned scenario, starting at the target URL. Include a meaningful assertion; do not combine unrelated positive and negative flows.",
+    "10. Never use page.waitForTimeout(), page.$(), page.$$(), or page.waitForSelector(). Prefer the locator APIs above and web-first expect(...) assertions.",
+    "11. Use only element names and labels that appear in the supplied accessibility snapshot. Do not invent selectors, element names, or labels.",
     "",
     "[OUTPUT FORMAT]",
     "Output ONLY raw JSON with exact keys: id, title, script. Do not wrap the JSON in markdown, code fences, or additional text.",
@@ -476,6 +490,7 @@ const toOllamaTool = (tool: { name: string; description?: string; inputSchema: u
 const callOllamaModel = async (
   ollama: Pick<Ollama, "chat">,
   model: string,
+  stage: "planner" | "script",
   prompt: string,
   systemInstruction: string,
   responseFormat: object,
@@ -508,13 +523,15 @@ const callOllamaModel = async (
       try {
         response = await ollama.chat({
           model,
+          ...(stage === "planner" && options.plannerThink === true ? { think: true } : {}),
           messages,
           tools,
           format: responseFormat,
+          ...(options.keepAlive !== undefined ? { keep_alive: options.keepAlive } : {}),
           options: {
             temperature: 0.1,
             repeat_penalty: 1.15,
-            num_ctx: 8192,
+            num_ctx: options.numCtx ?? 8192,
             num_predict: 4096,
           },
         });
@@ -523,13 +540,19 @@ const callOllamaModel = async (
           await writeOllamaDebugRecord(options.debugContext, {
             event: "chat-error",
             turn: turn + 1,
+            model,
+            stage,
             error: serializeOllamaDebugError(error),
           });
         }
         throw error;
       }
 
-      messages.push(response.message);
+      messages.push({
+        role: response.message.role,
+        content: response.message.content,
+        ...(response.message.tool_calls ? { tool_calls: response.message.tool_calls } : {}),
+      });
 
       const toolCalls = response.message.tool_calls ?? [];
       if (toolCalls.length === 0) {
@@ -572,22 +595,28 @@ const callOllamaModel = async (
   }
 };
 
-const createRunContext = (options: LlmGenerationOptions) => {
-  const model = options.ollamaModel ?? "qwen2.5-coder:7b";
+const createRunContext = (options: LlmGenerationOptions, stage: "planner" | "script") => {
+  const model = stage === "planner"
+    ? options.plannerModel ?? options.ollamaModel ?? "qwen3.5:4b"
+    : options.scriptModel ?? options.ollamaModel ?? "qwen2.5-coder:7b";
+  const debugContext = options.debugContext
+    ? { ...options.debugContext, stage, model }
+    : undefined;
+  const runOptions = { ...options, debugContext };
   const client = options.ollamaClient ?? new Ollama({
     host: options.ollamaHost ?? "http://localhost:11434",
-    ...(options.debugContext ? { fetch: createOllamaDebugFetch(options.debugContext) } : {}),
+    ...(debugContext ? { fetch: createOllamaDebugFetch(debugContext) } : {}),
   });
 
   return (prompt: string, systemInstruction: string, responseFormat: object): Promise<string> =>
-    callOllamaModel(client, model, prompt, systemInstruction, responseFormat, options);
+    callOllamaModel(client, model, stage, prompt, systemInstruction, responseFormat, runOptions);
 };
 
 export const generateTestPlans = async (
   payload: CopilotRequest,
   options: LlmGenerationOptions = {},
 ): Promise<TestPlan[]> => {
-  const runPromptSafely = createRunContext(options);
+  const runPromptSafely = createRunContext(options, "planner");
   const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
   const plannerRaw = await runPromptSafely(
     buildPlannerPrompt(payload, maxPromptChars),
@@ -613,13 +642,13 @@ export const generateNextTestPlan = async (
 ): Promise<NextTestPlanResult> => {
   const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
   const instructions = [
-    "You are a QA planner creating one independent test case at a time for the current discovered page/state.",
-    "Use only concrete behaviors supported by the requirement and accessibility snapshot.",
-    "Return status=case with exactly one distinct scenario that is not already covered, or status=done only when no additional meaningful scenario remains for this page/state.",
-    "Do not combine positive and negative scenarios. Avoid speculative, redundant, or low-value cases.",
-    "If authentication is required, include login as the initial test steps.",
-    "For status=done, return empty strings for text fields, type=UI, and an empty testSteps array.",
-    "Return only the JSON object required by the schema.",
+    "Plan one independent test for this page/state.",
+    "Use only requirement/snapshot behavior; avoid duplicates and speculation.",
+    "Return one distinct scenario not already covered (status=case), or status=done if none remain; separate positive and negative cases.",
+    "Apply equivalence partitioning, boundary-value analysis, and negative input validation (e.g. quantity 0/negative/above stock, empty required fields).",
+    "Write title, description, testSteps, expectedResult in Thai; preserve snapshot UI labels, element names, and URLs.",
+    "Expected results must be observable/verifiable (visible text, URL, element count, enabled/disabled state), not vague ('works correctly').",
+    "Start with login if required. For status=done, use empty text fields, type=UI, empty testSteps. Return schema JSON only.",
   ].join("\n");
   const contextBudget = Math.max(0, maxPromptChars - instructions.length - 256);
   const specification = payload.specification.trim() || "No requirement specification was provided.";
@@ -647,7 +676,7 @@ export const generateNextTestPlan = async (
     "[Already Covered Cases]",
     knownCases || "None",
   ].join("\n");
-  const runPromptSafely = createRunContext({ ...options, usePlaywrightTools: false });
+  const runPromptSafely = createRunContext({ ...options, usePlaywrightTools: false }, "planner");
   const raw = await runPromptSafely(
     prompt.length > maxPromptChars ? prompt.slice(0, maxPromptChars) : prompt,
     "Plan one distinct test case at a time from the supplied page snapshot, or report that this page has no more meaningful uncovered cases.",
@@ -724,7 +753,7 @@ export const generateSingleScript = async (
   plannedCase: TestPlan,
   options: LlmGenerationOptions = {},
 ): Promise<GeneratedTestCase> => {
-  const runPromptSafely = createRunContext({ ...options, usePlaywrightTools: false });
+  const runPromptSafely = createRunContext({ ...options, usePlaywrightTools: false }, "script");
   const maxPromptChars = options.maxPromptChars ?? DEFAULT_LLM_MAX_PROMPT_CHARS;
 
   let scriptShape: string | undefined;

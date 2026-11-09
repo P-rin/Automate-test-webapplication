@@ -27,11 +27,14 @@ npm install
 cp .env.example .env
 ```
 
-Fill Firebase Admin credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`). Start Ollama on the backend host and pull the configured model:
+Fill Firebase Admin credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`). Start Ollama on the backend host and pull both configured models:
 
 ```bash
+ollama pull qwen3.5:4b
 ollama pull qwen2.5-coder:7b
 ```
+
+On machines with 16 GB RAM or less, set `OLLAMA_MAX_LOADED_MODELS=1` as a Windows user environment variable and restart Ollama. This prevents the planner and script models from being loaded into memory at the same time.
 
 GitHub OAuth remains a separate session feature and still checks Copilot entitlement:
 
@@ -43,6 +46,11 @@ Environment keys:
 
 - `OLLAMA_BASE_URL` = Ollama server URL (default `http://localhost:11434`)
 - `OLLAMA_MODEL` = generation model (default `qwen2.5-coder:7b`)
+- `OLLAMA_PLANNER_MODEL` = test-case planning model (default `qwen3.5:4b`)
+- `OLLAMA_SCRIPT_MODEL` = Playwright script-generation model (default `qwen2.5-coder:7b`)
+- `OLLAMA_PLANNER_THINK` = enable thinking on planner requests (`false` by default)
+- `OLLAMA_NUM_CTX` = Ollama context window size (default `8192`)
+- `OLLAMA_KEEP_ALIVE` = duration to keep the active model loaded (default `5m`)
 - `LLM_MAX_PROMPT_CHARS` = maximum planner prompt size
 - `COPILOT_API_URL` and `COPILOT_MODEL` = used only by the separate GitHub OAuth entitlement check
 - `PLAYWRIGHT_EXPLORE_MAX_SNAPSHOTS` = max number of snapshots to collect during MCP exploration

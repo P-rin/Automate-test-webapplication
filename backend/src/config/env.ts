@@ -42,6 +42,11 @@ export const env = {
   copilotModel: process.env.COPILOT_MODEL ?? "gpt-4.1",
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
   ollamaModel: process.env.OLLAMA_MODEL ?? "qwen2.5-coder:7b",
+  ollamaPlannerModel: process.env.OLLAMA_PLANNER_MODEL ?? process.env.OLLAMA_MODEL ?? "qwen3.5:4b",
+  ollamaScriptModel: process.env.OLLAMA_SCRIPT_MODEL ?? process.env.OLLAMA_MODEL ?? "qwen2.5-coder:7b",
+  ollamaPlannerThink: asBool(process.env.OLLAMA_PLANNER_THINK, false),
+  ollamaNumCtx: Number(process.env.OLLAMA_NUM_CTX ?? 8192),
+  ollamaKeepAlive: process.env.OLLAMA_KEEP_ALIVE ?? "5m",
   llmMaxPromptChars: Number(process.env.LLM_MAX_PROMPT_CHARS ?? 14000),
   playwrightExploreMaxSnapshots: Number(process.env.PLAYWRIGHT_EXPLORE_MAX_SNAPSHOTS ?? 8),
   playwrightExploreMaxCandidates: Number(process.env.PLAYWRIGHT_EXPLORE_MAX_CANDIDATES ?? 5),
@@ -60,3 +65,14 @@ export const env = {
   executionEngine: (process.env.EXECUTION_ENGINE ?? "playwright").toLowerCase(),
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 120000),
 };
+
+export const buildLlmGenerationOptions = () => ({
+  ollamaHost: env.ollamaBaseUrl,
+  ollamaModel: env.ollamaModel,
+  plannerModel: env.ollamaPlannerModel,
+  scriptModel: env.ollamaScriptModel,
+  plannerThink: env.ollamaPlannerThink,
+  numCtx: env.ollamaNumCtx,
+  keepAlive: env.ollamaKeepAlive,
+  maxPromptChars: env.llmMaxPromptChars,
+});

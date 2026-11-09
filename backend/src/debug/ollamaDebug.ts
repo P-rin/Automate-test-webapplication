@@ -5,6 +5,7 @@ import path from "node:path";
 export interface OllamaDebugContext {
   jobId: string;
   stage: "planner" | "script";
+  model?: string;
   planId?: string;
 }
 

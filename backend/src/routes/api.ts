@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { Timestamp } from "../lib/firestore.js";
-import { env } from "../config/env.js";
+import { buildLlmGenerationOptions, env } from "../config/env.js";
 import {
   createGithubSession,
   exchangeGithubCodeForToken,
@@ -189,11 +189,7 @@ apiRouter.post("/generate", requireFirebaseAuth, upload.array("files"), async (r
         specification: effectiveSpecification,
         accessibilitySnapshot: snapshot,
       },
-      {
-        ollamaHost: env.ollamaBaseUrl,
-        ollamaModel: env.ollamaModel,
-        maxPromptChars: env.llmMaxPromptChars,
-      },
+      buildLlmGenerationOptions(),
     );
 
     const primary = generatedTests[0];
@@ -253,11 +249,7 @@ apiRouter.post("/v2/generation-jobs/:jobId/cases/:caseId/retry", requireFirebase
       req.params.jobId,
       req.params.caseId,
       getFirebaseUid(res),
-      {
-        ollamaHost: env.ollamaBaseUrl,
-        ollamaModel: env.ollamaModel,
-        maxPromptChars: env.llmMaxPromptChars,
-      },
+      buildLlmGenerationOptions(),
     );
     return res.json(result);
   } catch (error) {
@@ -367,11 +359,7 @@ apiRouter.post("/v2/generation-jobs/:jobId/generate-scripts", requireFirebaseAut
       req.params.jobId,
       getFirebaseUid(res),
       payload.caseIds,
-      {
-        ollamaHost: env.ollamaBaseUrl,
-        ollamaModel: env.ollamaModel,
-        maxPromptChars: env.llmMaxPromptChars,
-      },
+      buildLlmGenerationOptions(),
     );
     return res.status(202).json({ status: "accepted", ...result });
   } catch (error) {
@@ -411,11 +399,7 @@ apiRouter.post("/generate-job", requireFirebaseAuth, upload.array("files"), asyn
       projectName,
       targetUrl,
       specification: effectiveSpecification,
-    }, {
-      ollamaHost: env.ollamaBaseUrl,
-      ollamaModel: env.ollamaModel,
-      maxPromptChars: env.llmMaxPromptChars,
-    });
+    }, buildLlmGenerationOptions());
 
     return res.status(202).json({ jobId, status: "accepted" });
   } catch (error) {
@@ -449,11 +433,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
       projectName,
       targetUrl,
       specification: effectiveSpecification,
-    }, {
-      ollamaHost: env.ollamaBaseUrl,
-      ollamaModel: env.ollamaModel,
-      maxPromptChars: env.llmMaxPromptChars,
-    });
+    }, buildLlmGenerationOptions());
 
     return res.status(202).json({
       jobId,
@@ -499,11 +479,7 @@ apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), asy
       projectName,
       targetUrl,
       specification: effectiveSpecification,
-    }, {
-      ollamaHost: env.ollamaBaseUrl,
-      ollamaModel: env.ollamaModel,
-      maxPromptChars: env.llmMaxPromptChars,
-    });
+    }, buildLlmGenerationOptions());
 
     return res.status(202).json({
       jobId,

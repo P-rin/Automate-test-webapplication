@@ -20,6 +20,24 @@ const generationPayload = {
   accessibilitySnapshot: "heading Example Domain",
 };
 
+const validPlanResponse = JSON.stringify({
+  status: "case",
+  id: "TC-001",
+  title: "ตรวจสอบหน้าเว็บ",
+  description: "ตรวจสอบว่าหน้าเว็บแสดงผล",
+  type: "UI",
+  testSteps: ["เปิดหน้าเว็บ"],
+  expectedResult: "มีหัวข้อแสดงอยู่บนหน้าเว็บ",
+});
+
+const validScript = `import { test, expect } from '@playwright/test';\n\n` +
+  `test('page loads', async ({ page }) => {\n` +
+  `  await page.goto('https://example.com');\n` +
+  `  await expect(page).toHaveTitle(/.+/);\n` +
+  `});\n`;
+
+type OllamaChatRequest = Parameters<NonNullable<LlmGenerationOptions["ollamaClient"]>["chat"]>[0];
+
 const mockMcpClient = (calls: string[] = []): NonNullable<LlmGenerationOptions["mcpClient"]> => ({
   listTools: async () => ({
     tools: [{
@@ -35,9 +53,13 @@ const mockMcpClient = (calls: string[] = []): NonNullable<LlmGenerationOptions["
 }) as unknown as NonNullable<LlmGenerationOptions["mcpClient"]>;
 
 const mockOllamaClient = (
-  responses: Array<{ content: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> }>,
+  responses: Array<{ content: string; thinking?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> }>,
+  requests: OllamaChatRequest[] = [],
 ): NonNullable<LlmGenerationOptions["ollamaClient"]> => ({
-  chat: async () => ({ message: responses.shift()! }),
+  chat: async (request: OllamaChatRequest) => {
+    requests.push(request);
+    return { message: responses.shift()! };
+  },
 }) as unknown as NonNullable<LlmGenerationOptions["ollamaClient"]>;
 
 test("parseJsonArrayResponse accepts a raw JSON array", () => {
@@ -85,6 +107,21 @@ test("validateGeneratedScript rejects MCP tool names and snapshot references", (
 
   assert.throws(() => validateGeneratedScript(invalidScripts[0]), /MCP browser tool names/i);
   assert.throws(() => validateGeneratedScript(invalidScripts[1]), /snapshot reference selectors/i);
+});
+
+test("validateGeneratedScript rejects discouraged waiting and page query APIs", () => {
+  for (const forbiddenCall of ["page.waitForTimeout(1000)", "page.$('button')", "page.$$('button')"]) {
+    const invalidScript = `import { test, expect } from '@playwright/test';\n` +
+      `test('example', async ({ page }) => {\n` +
+      `  await ${forbiddenCall};\n` +
+      `  await expect(page).toBeVisible();\n` +
+      `});\n`;
+
+    assert.throws(
+      () => validateGeneratedScript(invalidScript),
+      (error: unknown) => error instanceof Error && error.message.startsWith("Generated script"),
+    );
+  }
 });
 
 test("validateGeneratedScript rejects script with missing import", () => {
@@ -217,6 +254,106 @@ test("generateTestPlans dispatches MCP calls and parses Ollama JSON", async () =
   assert.equal(plans.length, 1);
   assert.equal(plans[0].id, "TC-001");
   assert.deepEqual(calls, ["browser_navigate:https://example.com"]);
+});
+
+test("planner and script stages select their configured models", async () => {
+  const requests: OllamaChatRequest[] = [];
+  const ollamaClient = mockOllamaClient([
+    { content: validPlanResponse, thinking: "This private reasoning is not part of the JSON output." },
+    { content: JSON.stringify({ id: "TC-001", title: "ตรวจสอบหน้าเว็บ", script: validScript }) },
+  ], requests);
+
+  await generateNextTestPlan(generationPayload, "heading Example Domain", [], {
+    ollamaClient,
+    plannerModel: "planner-test-model",
+  });
+  await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "ตรวจสอบหน้าเว็บ",
+    description: "ตรวจสอบว่าหน้าเว็บแสดงผล",
+    type: "UI",
+    testSteps: ["เปิดหน้าเว็บ"],
+    expectedResult: "มีหัวข้อแสดงอยู่บนหน้าเว็บ",
+  }, {
+    ollamaClient,
+    scriptModel: "script-test-model",
+  });
+
+  assert.equal(requests[0].model, "planner-test-model");
+  assert.equal(requests[1].model, "script-test-model");
+});
+
+test("both stages use ollamaModel when only the legacy model option is configured", async () => {
+  const requests: OllamaChatRequest[] = [];
+  const ollamaClient = mockOllamaClient([
+    { content: validPlanResponse },
+    { content: JSON.stringify({ id: "TC-001", title: "ตรวจสอบหน้าเว็บ", script: validScript }) },
+  ], requests);
+  const options = { ollamaClient, ollamaModel: "legacy-model" };
+
+  await generateNextTestPlan(generationPayload, "heading Example Domain", [], options);
+  await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "ตรวจสอบหน้าเว็บ",
+    description: "ตรวจสอบว่าหน้าเว็บแสดงผล",
+    type: "UI",
+    testSteps: ["เปิดหน้าเว็บ"],
+    expectedResult: "มีหัวข้อแสดงอยู่บนหน้าเว็บ",
+  }, options);
+
+  assert.deepEqual(requests.map((request) => request.model), ["legacy-model", "legacy-model"]);
+});
+
+test("planner and script stages use their stage defaults when no model is configured", async () => {
+  const requests: OllamaChatRequest[] = [];
+  const ollamaClient = mockOllamaClient([
+    { content: validPlanResponse },
+    { content: JSON.stringify({ id: "TC-001", title: "ตรวจสอบหน้าเว็บ", script: validScript }) },
+  ], requests);
+  const options = { ollamaClient };
+
+  await generateNextTestPlan(generationPayload, "heading Example Domain", [], options);
+  await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "ตรวจสอบหน้าเว็บ",
+    description: "ตรวจสอบว่าหน้าเว็บแสดงผล",
+    type: "UI",
+    testSteps: ["เปิดหน้าเว็บ"],
+    expectedResult: "มีหัวข้อแสดงอยู่บนหน้าเว็บ",
+  }, options);
+
+  assert.deepEqual(requests.map((request) => request.model), ["qwen3.5:4b", "qwen2.5-coder:7b"]);
+});
+
+test("think is sent only to planner when enabled, alongside shared Ollama settings", async () => {
+  const requests: OllamaChatRequest[] = [];
+  const ollamaClient = mockOllamaClient([
+    { content: validPlanResponse },
+    { content: JSON.stringify({ id: "TC-001", title: "ตรวจสอบหน้าเว็บ", script: validScript }) },
+  ], requests);
+  const options = {
+    ollamaClient,
+    plannerThink: true,
+    numCtx: 4096,
+    keepAlive: "10m",
+  };
+
+  await generateNextTestPlan(generationPayload, "heading Example Domain", [], options);
+  await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "ตรวจสอบหน้าเว็บ",
+    description: "ตรวจสอบว่าหน้าเว็บแสดงผล",
+    type: "UI",
+    testSteps: ["เปิดหน้าเว็บ"],
+    expectedResult: "มีหัวข้อแสดงอยู่บนหน้าเว็บ",
+  }, options);
+
+  assert.equal(requests[0].think, true);
+  assert.equal("think" in requests[1], false);
+  assert.equal(requests[0].options?.num_ctx, 4096);
+  assert.equal(requests[1].options?.num_ctx, 4096);
+  assert.equal(requests[0].keep_alive, "10m");
+  assert.equal(requests[1].keep_alive, "10m");
 });
 
 test("generateSingleScript validates an Ollama-generated Playwright script", async () => {
