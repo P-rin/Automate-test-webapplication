@@ -188,3 +188,17 @@ test("buildPlannedGenerationCase persists the full plan and snapshot reference w
     status: "planned",
   });
 });
+
+test("buildPlannedGenerationCase includes the selected page ID when supplied", () => {
+  const generationCase = buildPlannedGenerationCase({
+    id: "planner-id",
+    title: "Verify home page",
+    description: "Check the selected page",
+    type: "UI",
+    testSteps: ["Open home page"],
+    expectedResult: "Home page is visible",
+    requirementIds: ["AC-001"],
+  }, 1, "Landing page", "snapshot-00001", "page-home");
+
+  assert.equal(generationCase.pageId, "page-home");
+});

@@ -11,6 +11,7 @@ interface SaveTestInput {
   criteria?: string[];
   generationJobId?: string;
   generationCaseId?: string;
+  pageId?: string;
 }
 
 export interface ExecutionTestCase {
@@ -32,6 +33,7 @@ export const saveGeneratedTestCase = async (input: SaveTestInput): Promise<strin
     sourceUrl: input.url,
     ...(input.generationJobId ? { generationJobId: input.generationJobId } : {}),
     ...(input.generationCaseId ? { generationCaseId: input.generationCaseId } : {}),
+    ...(input.pageId ? { pageId: input.pageId } : {}),
     lastStatus: "pending",
     lastRunAt: null,
     createdAt: FieldValue.serverTimestamp(),

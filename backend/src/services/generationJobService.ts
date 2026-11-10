@@ -2,7 +2,7 @@ import { db, FieldValue, Timestamp } from "../lib/firestore.js";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { env } from "../config/env.js";
 import { saveGeneratedTestCase } from "./testCaseService.js";
-import { discoverAccessibilitySnapshot } from "./snapshotService.js";
+import { discoverAccessibilitySnapshot, discoverPages, discoverSelectedPageSnapshots } from "./snapshotService.js";
 import {
   processSnapshotTestPlans,
   generateNextTestPlan,
@@ -10,10 +10,12 @@ import {
   LlmGenerationOptions,
   sanitizePlanTraceability,
 } from "./ollamaService.js";
-import { TEST_PLAN_CATEGORIES, type AcceptanceCriterion, type RequirementUnit, type TestPlan } from "../types.js";
+import { TEST_PLAN_CATEGORIES, type AcceptanceCriterion, type GenerationPage, type RequirementUnit, type TestPlan } from "../types.js";
 import { toProjectId } from "../utils/project.js";
 import { cacheCasePatch, cacheCreatedJob, cacheJobPatch, cacheTimestampNow, dropJobCache } from "./jobProgressCache.js";
 import { generateAcceptanceCriteria, splitRequirementUnitsWithWarnings } from "./requirementService.js";
+import { findBestSnapshotForCriterion, type CriterionMatchSnapshot } from "./criterionMatching.js";
+export { findBestSnapshotForCriterion } from "./criterionMatching.js";
 
 interface GenerationJobPayload {
   projectName: string;
@@ -21,6 +23,10 @@ interface GenerationJobPayload {
   specification: string;
   allowMutatingTests?: boolean;
   ownerUid?: string;
+  humanReview?: boolean;
+  phase?: "page-discovery" | "selected-pages";
+  confirmedAcceptanceCriteria?: AcceptanceCriterion[];
+  selectedPages?: GenerationPage[];
 }
 
 const cacheableFirestoreValue = (value: unknown): boolean => {
@@ -31,7 +37,7 @@ const cacheableFirestoreValue = (value: unknown): boolean => {
 };
 
 interface GenerationJobUpdate {
-  status?: "pending" | "running" | "completed" | "incomplete" | "failed";
+  status?: "pending" | "running" | "awaiting_ac_review" | "awaiting_page_selection" | "completed" | "incomplete" | "failed";
   percentage?: number;
   message?: string;
   errorMessage?: string;
@@ -41,6 +47,9 @@ interface GenerationJobUpdate {
   failedCaseCount?: number;
   snapshotCount?: number;
   processedSnapshotCount?: number;
+  pageCount?: number;
+  pageDiscoveryComplete?: boolean;
+  pageDiscoveryStopReason?: string;
   coverageComplete?: boolean;
   coverageStopReason?: string;
   primaryGeneratedTest?: { id: string; title: string };
@@ -77,6 +86,7 @@ export const createGenerationJob = async (payload: GenerationJobPayload): Promis
     targetUrl: payload.targetUrl,
     specification: payload.specification,
     allowMutatingTests: payload.allowMutatingTests ?? false,
+    humanReview: payload.humanReview ?? false,
     ...(payload.ownerUid ? { ownerUid: payload.ownerUid } : {}),
     status: "pending",
     percentage: 0,
@@ -121,6 +131,9 @@ export const updateGenerationJob = async (
   if (update.failedCaseCount !== undefined) payload.failedCaseCount = update.failedCaseCount;
   if (update.snapshotCount !== undefined) payload.snapshotCount = update.snapshotCount;
   if (update.processedSnapshotCount !== undefined) payload.processedSnapshotCount = update.processedSnapshotCount;
+  if (update.pageCount !== undefined) payload.pageCount = update.pageCount;
+  if (update.pageDiscoveryComplete !== undefined) payload.pageDiscoveryComplete = update.pageDiscoveryComplete;
+  if (update.pageDiscoveryStopReason !== undefined) payload.pageDiscoveryStopReason = update.pageDiscoveryStopReason;
   if (update.coverageComplete !== undefined) payload.coverageComplete = update.coverageComplete;
   if (update.coverageStopReason !== undefined) payload.coverageStopReason = update.coverageStopReason;
   if (update.primaryGeneratedTest !== undefined) payload.primaryGeneratedTest = update.primaryGeneratedTest;
@@ -152,6 +165,7 @@ interface GenerationCaseProgress {
   requirementIds?: string[];
   category?: string;
   page: string;
+  pageId?: string;
   snapshotId?: string;
   status: "planned" | "generating" | "saved" | "failed";
   testCaseId?: string;
@@ -218,7 +232,7 @@ export const decodeGenerationSnapshot = (snapshotData: Record<string, unknown>):
 
 const persistGenerationJobSnapshots = async (
   jobId: string,
-  snapshots: Array<{ title: string; snapshot: string }>,
+  snapshots: Array<{ title: string; snapshot: string; pageId?: string }>,
 ): Promise<string[]> => {
   const snapshotsCollection = db.collection("generationJobs").doc(jobId).collection("snapshots");
   const maxBatchBytes = 8 * 1024 * 1024;
@@ -244,6 +258,7 @@ const persistGenerationJobSnapshots = async (
     batch.set(snapshotsCollection.doc(snapshotId), {
       sequence: index + 1,
       title: item.title,
+      ...(item.pageId ? { pageId: item.pageId } : {}),
       encoding: "gzip-base64",
       compressedSnapshot,
       createdAt: FieldValue.serverTimestamp(),
@@ -317,6 +332,178 @@ const isAcceptanceCriterion = (value: unknown): value is AcceptanceCriterion => 
 const getJobAcceptanceCriteria = (job: Record<string, unknown>): AcceptanceCriterion[] =>
   Array.isArray(job.acceptanceCriteria) ? job.acceptanceCriteria.filter(isAcceptanceCriterion) : [];
 
+const generationJobRef = (jobId: string) => db.collection("generationJobs").doc(jobId);
+
+const generationPayloadFromJob = (job: Record<string, unknown>): GenerationJobPayload => ({
+  projectName: String(job.projectName ?? job.targetUrl ?? ""),
+  targetUrl: String(job.targetUrl ?? ""),
+  specification: String(job.specification ?? ""),
+  allowMutatingTests: job.allowMutatingTests === true,
+  ownerUid: typeof job.ownerUid === "string" ? job.ownerUid : undefined,
+  humanReview: job.humanReview === true,
+});
+
+export const getGenerationJobAcceptanceCriteria = async (
+  jobId: string,
+  ownerUid: string,
+): Promise<{
+  criteria: AcceptanceCriterion[];
+  analysisWarnings: string[];
+  requirementUnitCount: number;
+}> => {
+  const job = await getGenerationJob(jobId, ownerUid);
+  return {
+    criteria: getJobAcceptanceCriteria(job),
+    analysisWarnings: Array.isArray(job.analysisWarnings)
+      ? job.analysisWarnings.filter((warning): warning is string => typeof warning === "string")
+      : [],
+    requirementUnitCount: Array.isArray(job.requirementUnits) ? job.requirementUnits.length : 0,
+  };
+};
+
+export const updateGenerationJobAcceptanceCriteria = async (
+  jobId: string,
+  ownerUid: string,
+  criteria: AcceptanceCriterion[],
+): Promise<void> => {
+  const jobRef = generationJobRef(jobId);
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(jobRef);
+    if (!snapshot.exists || snapshot.data()?.ownerUid !== ownerUid) {
+      throw new GenerationRetryError("Generation job not found", 404);
+    }
+    if (snapshot.data()?.status !== "awaiting_ac_review") {
+      throw new GenerationRetryError("Acceptance criteria are not awaiting review", 409);
+    }
+    transaction.update(jobRef, { acceptanceCriteria: criteria, updatedAt: FieldValue.serverTimestamp() });
+  });
+  cacheJobPatch(jobId, { acceptanceCriteria: criteria });
+};
+
+export const confirmGenerationJobAcceptanceCriteria = async (
+  jobId: string,
+  ownerUid: string,
+): Promise<GenerationJobPayload> => {
+  const jobRef = generationJobRef(jobId);
+  let confirmedCriteria: AcceptanceCriterion[] = [];
+  let payload: GenerationJobPayload | undefined;
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(jobRef);
+    if (!snapshot.exists || snapshot.data()?.ownerUid !== ownerUid) {
+      throw new GenerationRetryError("Generation job not found", 404);
+    }
+    const job = snapshot.data() as Record<string, unknown>;
+    if (job.status !== "awaiting_ac_review") {
+      throw new GenerationRetryError("Acceptance criteria are not awaiting review", 409);
+    }
+    const editedCriteria = getJobAcceptanceCriteria(job);
+    confirmedCriteria = editedCriteria
+      .filter((criterion) => criterion.selectedByUser !== false)
+      .map((criterion) => ({ ...criterion, selectedByUser: true, confirmedByUser: true }));
+    if (confirmedCriteria.length === 0) {
+      throw new GenerationRetryError("Select or add at least one acceptance criterion before confirming", 409);
+    }
+    transaction.update(jobRef, {
+      reviewedAcceptanceCriteria: editedCriteria,
+      acceptanceCriteria: confirmedCriteria,
+      status: "running",
+      stage: "discovery",
+      percentage: 15,
+      message: "Acceptance criteria confirmed; discovering pages",
+      errorMessage: "",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    payload = generationPayloadFromJob(job);
+  });
+  cacheJobPatch(jobId, {
+    acceptanceCriteria: confirmedCriteria,
+    status: "running",
+    stage: "discovery",
+    percentage: 15,
+    message: "Acceptance criteria confirmed; discovering pages",
+    errorMessage: "",
+  });
+  return { ...payload!, phase: "page-discovery", confirmedAcceptanceCriteria: confirmedCriteria };
+};
+
+export const listGenerationJobPages = async (
+  jobId: string,
+  ownerUid: string,
+): Promise<GenerationPage[]> => {
+  await getGenerationJob(jobId, ownerUid);
+  const snapshot = await generationJobRef(jobId).collection("pages").get();
+  return snapshot.docs
+    .map((document) => document.data() as GenerationPage)
+    .sort((left, right) => left.depth - right.depth || left.title.localeCompare(right.title));
+};
+
+export const confirmGenerationJobPages = async (
+  jobId: string,
+  ownerUid: string,
+  requestedPageIds: string[],
+  confirmCoverageWarnings: boolean,
+): Promise<{ confirmed: boolean; warnings: string[]; payload?: GenerationJobPayload }> => {
+  const uniquePageIds = [...new Set(requestedPageIds)];
+  if (uniquePageIds.length === 0) throw new GenerationRetryError("Select at least one page", 409);
+  const jobRef = generationJobRef(jobId);
+  const job = await getGenerationJob(jobId, ownerUid);
+  if (job.status !== "awaiting_page_selection") {
+    throw new GenerationRetryError("Pages are not awaiting selection", 409);
+  }
+  const pageSnapshots = await Promise.all(uniquePageIds.map((pageId) => jobRef.collection("pages").doc(pageId).get()));
+  if (pageSnapshots.some((snapshot) => !snapshot.exists)) {
+    throw new GenerationRetryError("One or more selected pages were not found", 409);
+  }
+  const selectedPages = pageSnapshots.map((snapshot) => snapshot.data() as GenerationPage);
+  const acceptanceCriteria = getJobAcceptanceCriteria(job);
+  const supportedAcIds = new Set(selectedPages.flatMap((page) => page.suggestedAcIds));
+  const warnings = acceptanceCriteria
+    .filter((criterion) => !supportedAcIds.has(criterion.id))
+    .map((criterion) => criterion.id);
+  if (warnings.length > 0 && !confirmCoverageWarnings) {
+    return { confirmed: false, warnings };
+  }
+
+  let payload: GenerationJobPayload | undefined;
+  await db.runTransaction(async (transaction) => {
+    const latest = await transaction.get(jobRef);
+    if (!latest.exists || latest.data()?.ownerUid !== ownerUid) {
+      throw new GenerationRetryError("Generation job not found", 404);
+    }
+    if (latest.data()?.status !== "awaiting_page_selection") {
+      throw new GenerationRetryError("Pages are not awaiting selection", 409);
+    }
+    transaction.update(jobRef, {
+      selectedPageIds: uniquePageIds,
+      status: "running",
+      stage: "discovery",
+      percentage: 25,
+      message: "Selected pages confirmed; exploring selected pages",
+      errorMessage: "",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    payload = generationPayloadFromJob(latest.data() as Record<string, unknown>);
+  });
+  cacheJobPatch(jobId, {
+    selectedPageIds: uniquePageIds,
+    status: "running",
+    stage: "discovery",
+    percentage: 25,
+    message: "Selected pages confirmed; exploring selected pages",
+    errorMessage: "",
+  });
+  return {
+    confirmed: true,
+    warnings,
+    payload: {
+      ...payload!,
+      phase: "selected-pages",
+      confirmedAcceptanceCriteria: acceptanceCriteria,
+      selectedPages,
+    },
+  };
+};
+
 const generateAndSaveCaseScript = async (
   jobId: string,
   job: Record<string, unknown>,
@@ -365,6 +552,7 @@ const generateAndSaveCaseScript = async (
     script: generated.script,
     generationJobId: jobId,
     generationCaseId: caseId,
+    ...(typeof generationCase.pageId === "string" ? { pageId: generationCase.pageId } : {}),
   });
 
   await updateGenerationCaseFields(jobId, caseId, {
@@ -534,6 +722,7 @@ export const listGenerationJobCases = async (
         : undefined,
       category: data.category,
       page: data.page,
+      pageId: data.pageId,
       snapshotId: data.snapshotId,
       status: data.status,
       testCaseId: data.testCaseId,
@@ -730,6 +919,7 @@ export const retryFailedGenerationCase = async (
       script: generated.script,
       generationJobId: jobId,
       generationCaseId: caseId,
+      ...(typeof generationCase.pageId === "string" ? { pageId: generationCase.pageId } : {}),
     });
 
     await caseRef.update({
@@ -760,6 +950,7 @@ export const buildPlannedGenerationCase = (
   sequence: number,
   page: string,
   snapshotId: string,
+  pageId?: string,
 ): GenerationCaseProgress => ({
   id: `case-${String(sequence).padStart(5, "0")}`,
   sequence,
@@ -771,51 +962,17 @@ export const buildPlannedGenerationCase = (
   ...(plan.requirementIds ? { requirementIds: [...plan.requirementIds] } : {}),
   ...(plan.category ? { category: plan.category } : {}),
   page,
+  ...(pageId ? { pageId } : {}),
   snapshotId,
   status: "planned",
 });
-
-interface CoverageGapSnapshot {
-  title: string;
-  snapshot: string;
-}
 
 export interface CoverageGap {
   acId: string;
   reason: "no matching page discovered" | "planner could not create a case";
 }
 
-const keywordSegmenter = new Intl.Segmenter("th", { granularity: "word" });
-
-const keywordSet = (text: string): Set<string> =>
-  new Set([...keywordSegmenter.segment(text.toLocaleLowerCase())]
-    .filter((segment) => segment.isWordLike && segment.segment.length > 1)
-    .map((segment) => segment.segment));
-
-export const findBestSnapshotForCriterion = <T extends CoverageGapSnapshot>(
-  criterion: AcceptanceCriterion,
-  snapshots: T[],
-): { snapshot?: T; overlap: number } => {
-  const criterionKeywords = keywordSet(`${criterion.scenario} ${criterion.action} ${criterion.expected}`);
-  let bestSnapshot: T | undefined;
-  let bestOverlap = 0;
-
-  for (const snapshot of snapshots) {
-    const snapshotKeywords = keywordSet(`${snapshot.title} ${snapshot.snapshot}`);
-    let overlap = 0;
-    for (const keyword of criterionKeywords) {
-      if (snapshotKeywords.has(keyword)) overlap += 1;
-    }
-    if (overlap > bestOverlap) {
-      bestSnapshot = snapshot;
-      bestOverlap = overlap;
-    }
-  }
-
-  return { snapshot: bestSnapshot, overlap: bestOverlap };
-};
-
-export const runCoverageGapPass = async <T extends CoverageGapSnapshot>(
+export const runCoverageGapPass = async <T extends CriterionMatchSnapshot>(
   criteria: AcceptanceCriterion[],
   snapshots: T[],
   coveredAcIds: Set<string>,
@@ -861,18 +1018,67 @@ export const runCoverageGapPass = async <T extends CoverageGapSnapshot>(
   return gaps;
 };
 
+const runGenerationPageDiscovery = async (
+  jobId: string,
+  payload: GenerationJobPayload,
+  acceptanceCriteria: AcceptanceCriterion[],
+): Promise<void> => {
+  await updateGenerationJob(jobId, {
+    status: "running",
+    stage: "discovery",
+    percentage: 15,
+    message: "Discovering internal pages for selection",
+  });
+  const discovery = await discoverPages(
+    payload.targetUrl,
+    payload.specification,
+    acceptanceCriteria,
+    {
+      maxPages: env.generationJobMaxPages,
+      maxDepth: env.generationJobPageMaxDepth,
+      maxNavigationActions: env.generationJobPageMaxNavigationActions,
+    },
+  );
+  if (discovery.pages.length === 0) {
+    throw new Error("Page discovery did not find any pages on the target website");
+  }
+
+  const pagesCollection = generationJobRef(jobId).collection("pages");
+  let batch = db.batch();
+  for (const page of discovery.pages) {
+    batch.set(pagesCollection.doc(page.pageId), {
+      ...page,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
+  await batch.commit();
+
+  await updateGenerationJob(jobId, {
+    status: "awaiting_page_selection",
+    stage: "discovery",
+    percentage: 25,
+    pageCount: discovery.pages.length,
+    pageDiscoveryComplete: discovery.complete,
+    pageDiscoveryStopReason: discovery.stopReason ?? "",
+    message: `พบ ${discovery.pages.length} หน้า กรุณาเลือกหน้าที่ต้องการทดสอบ`,
+  });
+};
+
 export const processGenerateJob = async (
   jobId: string,
   payload: GenerationJobPayload,
   options: LlmGenerationOptions = {},
 ): Promise<void> => {
   const hasSpecification = Boolean(payload.specification.trim());
+  const isResume = payload.phase !== undefined;
   await updateGenerationJob(jobId, {
     status: "running",
-    percentage: 0,
-    message: hasSpecification ? "Analyzing requirement specification" : "Preparing generation",
-    stage: hasSpecification ? "analysis" : "discovery",
-    startedAt: true,
+    percentage: isResume ? (payload.phase === "selected-pages" ? 25 : 15) : 0,
+    message: isResume
+      ? payload.phase === "selected-pages" ? "Exploring selected pages" : "Discovering internal pages"
+      : hasSpecification ? "Analyzing requirement specification" : "Preparing generation",
+    stage: isResume ? "discovery" : hasSpecification ? "analysis" : "discovery",
+    ...(!isResume ? { startedAt: true } : {}),
   });
 
   let discoveryFinished = false;
@@ -882,10 +1088,10 @@ export const processGenerateJob = async (
   let processedSnapshotCount = 0;
   let coverageStopReason = "";
   let lastJobFlush = 0;
-  let acceptanceCriteria: AcceptanceCriterion[] = [];
+  let acceptanceCriteria: AcceptanceCriterion[] = payload.confirmedAcceptanceCriteria ?? [];
 
   try {
-    if (hasSpecification) {
+    if (hasSpecification && !isResume) {
       await updateGenerationJob(jobId, {
         stage: "analysis",
         percentage: 1,
@@ -921,21 +1127,48 @@ export const processGenerateJob = async (
       });
     }
 
+    if (payload.humanReview && !isResume && hasSpecification) {
+      await updateGenerationJob(jobId, {
+        status: "awaiting_ac_review",
+        stage: "analysis",
+        percentage: 15,
+        message: "ตรวจทานและยืนยัน Acceptance Criteria ก่อนสำรวจเว็บไซต์",
+        errorMessage: "",
+      });
+      return;
+    }
+
+    if (payload.phase === "page-discovery" || (payload.humanReview && !isResume)) {
+      await runGenerationPageDiscovery(jobId, payload, acceptanceCriteria);
+      return;
+    }
+
     await updateGenerationJob(jobId, {
       stage: "discovery",
-      percentage: hasSpecification ? 10 : 0,
-      message: "Building accessibility snapshot",
+      percentage: payload.phase === "selected-pages" ? 30 : hasSpecification ? 10 : 0,
+      message: payload.phase === "selected-pages" ? "Building snapshots for selected pages" : "Building accessibility snapshot",
     });
-    const discovery = await discoverAccessibilitySnapshot(payload.targetUrl, payload.specification, {
-      maxSnapshots: env.generationJobMaxSnapshots,
-      maxCandidates: env.generationJobMaxCandidates,
-      maxDepth: env.generationJobMaxDepth,
-    });
+    const discovery = payload.phase === "selected-pages"
+      ? await discoverSelectedPageSnapshots(
+        payload.targetUrl,
+        payload.specification,
+        payload.selectedPages ?? [],
+        {
+          maxSnapshots: env.generationJobMaxSnapshots,
+          maxCandidates: env.generationJobMaxCandidates,
+          maxDepth: env.generationJobMaxDepth,
+        },
+      )
+      : await discoverAccessibilitySnapshot(payload.targetUrl, payload.specification, {
+        maxSnapshots: env.generationJobMaxSnapshots,
+        maxCandidates: env.generationJobMaxCandidates,
+        maxDepth: env.generationJobMaxDepth,
+      });
     discoveryFinished = true;
     coverageStopReason = discovery.stopReason ?? "";
     const snapshots = discovery.snapshots;
     const snapshotIds = await persistGenerationJobSnapshots(jobId, snapshots);
-    const planningBasePercentage = hasSpecification ? 20 : 10;
+    const planningBasePercentage = payload.phase === "selected-pages" ? 35 : hasSpecification ? 20 : 10;
     await updateGenerationJob(jobId, {
       stage: "planning",
       percentage: planningBasePercentage,
@@ -966,7 +1199,7 @@ export const processGenerateJob = async (
           if (!normalizedTitle || caseKeys.has(normalizedTitle)) return false;
           caseKeys.add(normalizedTitle);
           caseCount += 1;
-          const caseProgress = buildPlannedGenerationCase(plan, caseCount, snapshot.title, snapshotIds[snapshotIndex]);
+          const caseProgress = buildPlannedGenerationCase(plan, caseCount, snapshot.title, snapshotIds[snapshotIndex], snapshot.pageId);
 
           await updateGenerationCase(jobId, caseProgress.id, caseProgress);
           const progress = {
@@ -1042,6 +1275,7 @@ export const processGenerateJob = async (
           caseCount,
           snapshot.title,
           snapshotIds[snapshotIndex],
+          snapshot.pageId,
         );
         await updateGenerationCase(jobId, caseProgress.id, caseProgress);
         await updateGenerationJob(jobId, {

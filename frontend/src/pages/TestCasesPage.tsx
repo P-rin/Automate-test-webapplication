@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { db } from '../lib/firebase';
 import type { TestCase, Project } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -16,6 +16,7 @@ interface GenerationJobCase {
   testSteps: string[];
   expectedResult: string;
   page: string;
+  pageId?: string;
   status: 'planned' | 'generating' | 'saved' | 'failed';
   requirementIds?: string[];
   category?: string;
@@ -600,6 +601,14 @@ export default function TestCasesPage() {
                       {job.scriptGenerationError && <p className="mt-1 text-xs text-red-700">{job.scriptGenerationError}</p>}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
+                      {['awaiting_ac_review', 'awaiting_page_selection'].includes(job.status) && (
+                        <Link
+                          to={`/setup?jobId=${encodeURIComponent(job.id)}`}
+                          className="rounded-md border border-amber-600 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-50"
+                        >
+                          ดำเนินการตรวจทานต่อ
+                        </Link>
+                      )}
                       <button
                         type="button"
                         onClick={() => handleGenerateJobScripts(job.id, selectedCaseIds)}
@@ -824,7 +833,10 @@ export default function TestCasesPage() {
                                   ))}
                                 </div>
                               )}
-                              <p className="mt-1 text-xs text-gray-500">{testCase.page}</p>
+                              <p className="mt-1 text-xs text-gray-500">
+                                {testCase.page}
+                                {testCase.pageId ? ` · ${testCase.pageId}` : ''}
+                              </p>
                               <p className="mt-2 text-sm text-gray-700">{testCase.description}</p>
                               <div id={detailsId} hidden={!areDetailsExpanded} className="mt-2">
                                 {testCase.testSteps.length > 0 && (

@@ -14,6 +14,8 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 const jobStageLabels: Record<string, string> = {
   analysis: 'วิเคราะห์ Requirement',
   discovery: 'กำลังสำรวจหน้าเว็บ',
+  ac_review: 'ตรวจทาน Acceptance Criteria',
+  page_selection: 'เลือกหน้าที่ต้องการทดสอบ',
   planning: 'กำลังวางแผนทดสอบ',
   script: 'กำลังสร้างสคริปต์ทดสอบ',
   completed: 'เสร็จสิ้น',
@@ -30,9 +32,37 @@ interface GenerationJobCase {
   sequence: number;
   title: string;
   page: string;
+  pageId?: string;
   status: 'planned' | 'generating' | 'saved' | 'failed';
   testCaseId?: string;
   errorMessage?: string;
+}
+
+type AcceptanceCriterionCategory = 'happy_path' | 'validation' | 'negative' | 'boundary' | 'access_control';
+
+interface AcceptanceCriterion {
+  id: string;
+  requirementRef: string;
+  scenario: string;
+  action: string;
+  expected: string;
+  mustNot: string;
+  category: AcceptanceCriterionCategory;
+  priority: 'required' | 'important' | 'optional';
+  verification: 'automated' | 'manual';
+  ambiguity: string;
+  selectedByUser?: boolean;
+  confirmedByUser?: boolean;
+}
+
+interface GenerationPage {
+  pageId: string;
+  title: string;
+  urlPattern: string;
+  sampleUrl: string;
+  depth: number;
+  requiresLogin: boolean;
+  suggestedAcIds: string[];
 }
 
 interface GenerationJobDoc {
@@ -46,11 +76,20 @@ interface GenerationJobDoc {
   failedCaseCount?: number;
   snapshotCount?: number;
   processedSnapshotCount?: number;
+  pageCount?: number;
+  pageDiscoveryComplete?: boolean;
+  pageDiscoveryStopReason?: string;
   coverageComplete?: boolean;
   coverageStopReason?: string;
   primaryGeneratedTest?: GeneratedJobTest;
   cases?: GenerationJobCase[];
   caseCursor?: string;
+}
+
+interface AcceptanceCriteriaReview {
+  criteria: AcceptanceCriterion[];
+  analysisWarnings?: string[];
+  requirementUnitCount?: number;
 }
 
 export default function SetupPage() {
@@ -79,6 +118,17 @@ export default function SetupPage() {
   const [coverageComplete, setCoverageComplete] = useState(false);
   const [coverageStopReason, setCoverageStopReason] = useState('');
   const [jobCases, setJobCases] = useState<GenerationJobCase[]>([]);
+  const [acceptanceCriteria, setAcceptanceCriteria] = useState<AcceptanceCriterion[]>([]);
+  const [analysisWarnings, setAnalysisWarnings] = useState<string[]>([]);
+  const [requirementUnitCount, setRequirementUnitCount] = useState<number | null>(null);
+  const [generationPages, setGenerationPages] = useState<GenerationPage[]>([]);
+  const [pageDiscoveryComplete, setPageDiscoveryComplete] = useState(true);
+  const [pageDiscoveryStopReason, setPageDiscoveryStopReason] = useState('');
+  const [selectedPageIds, setSelectedPageIds] = useState<string[]>([]);
+  const [workflowError, setWorkflowError] = useState('');
+  const [isWorkflowSubmitting, setIsWorkflowSubmitting] = useState(false);
+  const [coverageWarnings, setCoverageWarnings] = useState<string[]>([]);
+  const [warningConfirmationRequired, setWarningConfirmationRequired] = useState(false);
   const [steps, setSteps] = useState<StepState>({
     connecting: 'idle', reading: 'idle', fetching: 'idle', writing: 'idle',
   });
@@ -165,6 +215,16 @@ export default function SetupPage() {
     setCoverageComplete(false);
     setCoverageStopReason('');
     setJobCases([]);
+    setAcceptanceCriteria([]);
+    setAnalysisWarnings([]);
+    setRequirementUnitCount(null);
+    setGenerationPages([]);
+    setPageDiscoveryComplete(true);
+    setPageDiscoveryStopReason('');
+    setSelectedPageIds([]);
+    setWorkflowError('');
+    setCoverageWarnings([]);
+    setWarningConfirmationRequired(false);
     setSteps({ connecting: 'loading', reading: 'idle', fetching: 'idle', writing: 'idle' });
 
     try {
@@ -173,6 +233,7 @@ export default function SetupPage() {
       formData.append('projectName', projectName || url);
       formData.append('requirements', requirementsText.trim());
       formData.append('allowMutatingTests', String(allowMutatingTests));
+      formData.append('humanReview', 'true');
       files.forEach(f => formData.append('files', f));
       const idToken = await user.getIdToken();
 
@@ -279,6 +340,160 @@ export default function SetupPage() {
     };
   }, [jobId, user]);
 
+  useEffect(() => {
+    if (!jobId || !user || !['awaiting_ac_review', 'awaiting_page_selection'].includes(jobStatus)) return;
+
+    let cancelled = false;
+    const loadReviewData = async () => {
+      try {
+        const idToken = await user.getIdToken();
+        const headers = { Authorization: `Bearer ${idToken}` };
+        if (jobStatus === 'awaiting_ac_review') {
+          const response = await fetch(`${BACKEND_URL}/api/v2/generation-jobs/${jobId}/acceptance-criteria`, { headers });
+          if (!response.ok) throw new Error(await response.text());
+          const data = await response.json() as AcceptanceCriteriaReview;
+          if (!cancelled) {
+            setAcceptanceCriteria(data.criteria.map(criterion => ({
+              ...criterion,
+              selectedByUser: criterion.selectedByUser ?? true,
+            })));
+            setAnalysisWarnings(data.analysisWarnings ?? []);
+            setRequirementUnitCount(data.requirementUnitCount ?? null);
+          }
+        } else {
+          const [criteriaResponse, pagesResponse] = await Promise.all([
+            fetch(`${BACKEND_URL}/api/v2/generation-jobs/${jobId}/acceptance-criteria`, { headers }),
+            fetch(`${BACKEND_URL}/api/v2/generation-jobs/${jobId}/pages`, { headers }),
+          ]);
+          if (!criteriaResponse.ok) throw new Error(await criteriaResponse.text());
+          if (!pagesResponse.ok) throw new Error(await pagesResponse.text());
+          const criteriaData = await criteriaResponse.json() as AcceptanceCriteriaReview;
+          const data = await pagesResponse.json() as { pages: GenerationPage[]; complete?: boolean; stopReason?: string };
+          if (!cancelled) {
+            setAcceptanceCriteria(criteriaData.criteria);
+            setAnalysisWarnings(criteriaData.analysisWarnings ?? []);
+            setRequirementUnitCount(criteriaData.requirementUnitCount ?? null);
+            setGenerationPages(data.pages);
+            setPageDiscoveryComplete(data.complete ?? true);
+            setPageDiscoveryStopReason(data.stopReason ?? '');
+            const suggestedIds = data.pages
+              .filter(page => page.suggestedAcIds.length > 0)
+              .map(page => page.pageId);
+            setSelectedPageIds(suggestedIds.length > 0
+              ? suggestedIds
+              : data.pages.filter(page => page.depth === 0).map(page => page.pageId));
+          }
+        }
+      } catch (error) {
+        if (!cancelled) setWorkflowError(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    void loadReviewData();
+    return () => { cancelled = true; };
+  }, [jobId, user, jobStatus]);
+
+  const updateAcceptanceCriterion = <K extends keyof AcceptanceCriterion>(
+    criterionId: string,
+    key: K,
+    value: AcceptanceCriterion[K],
+  ) => {
+    setAcceptanceCriteria(criteria => criteria.map(criterion => criterion.id === criterionId
+      ? { ...criterion, [key]: value }
+      : criterion));
+  };
+
+  const handleAddAcceptanceCriterion = () => {
+    const id = `AC-USER-${Date.now()}`;
+    setAcceptanceCriteria(criteria => [...criteria, {
+      id,
+      requirementRef: 'ผู้ใช้เพิ่ม',
+      scenario: '',
+      action: '',
+      expected: '',
+      mustNot: '',
+      category: 'happy_path',
+      priority: 'required',
+      verification: 'automated',
+      ambiguity: '',
+      selectedByUser: true,
+    }]);
+  };
+
+  const handleConfirmAcceptanceCriteria = async () => {
+    if (!user || !jobId) return;
+    setIsWorkflowSubmitting(true);
+    setWorkflowError('');
+    try {
+      const idToken = await user.getIdToken();
+      const headers = { Authorization: `Bearer ${idToken}`, 'Content-Type': 'application/json' };
+      const saveResponse = await fetch(`${BACKEND_URL}/api/v2/generation-jobs/${jobId}/acceptance-criteria`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ criteria: acceptanceCriteria }),
+      });
+      if (!saveResponse.ok) throw new Error(await saveResponse.text());
+      const confirmResponse = await fetch(`${BACKEND_URL}/api/v2/generation-jobs/${jobId}/acceptance-criteria/confirm`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({}),
+      });
+      if (!confirmResponse.ok) throw new Error(await confirmResponse.text());
+      setAcceptanceCriteria(acceptanceCriteria
+        .filter(criterion => criterion.selectedByUser !== false)
+        .map(criterion => ({ ...criterion, selectedByUser: true, confirmedByUser: true })));
+      setJobStatus('running');
+      setJobMessage('ยืนยัน Acceptance Criteria แล้ว กำลังค้นหาหน้าเว็บ');
+    } catch (error) {
+      setWorkflowError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsWorkflowSubmitting(false);
+    }
+  };
+
+  const handleConfirmPageSelection = async () => {
+    if (!user || !jobId || selectedPageIds.length === 0) return;
+    setIsWorkflowSubmitting(true);
+    setWorkflowError('');
+    try {
+      const idToken = await user.getIdToken();
+      const response = await fetch(`${BACKEND_URL}/api/v2/generation-jobs/${jobId}/pages/confirm`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pageIds: selectedPageIds,
+          confirmCoverageWarnings: warningConfirmationRequired,
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json() as { confirmed: boolean; warnings?: string[] };
+      if (!data.confirmed) {
+        setCoverageWarnings(data.warnings ?? []);
+        setWarningConfirmationRequired(true);
+        return;
+      }
+      setCoverageWarnings(data.warnings ?? []);
+      setWarningConfirmationRequired(false);
+      setJobStatus('running');
+      setJobMessage('ยืนยันหน้าที่เลือกแล้ว กำลังสำรวจเชิงลึกและออกแบบ Test case');
+    } catch (error) {
+      setWorkflowError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsWorkflowSubmitting(false);
+    }
+  };
+
+  const handlePageSelectionChange = (pageId: string, selected: boolean) => {
+    setSelectedPageIds(current => selected
+      ? [...new Set([...current, pageId])]
+      : current.filter(id => id !== pageId));
+    setCoverageWarnings([]);
+    setWarningConfirmationRequired(false);
+  };
+
+  const unsupportedAcceptanceCriteria = acceptanceCriteria.filter(criterion =>
+    !generationPages.some(page => selectedPageIds.includes(page.pageId) && page.suggestedAcIds.includes(criterion.id)));
+
   const handleSave = async () => {
     if (!generatedCode) return;
     setIsSaving(true);
@@ -342,6 +557,8 @@ export default function SetupPage() {
   const jobStatusLabel: Record<string, string> = {
     pending: 'รอเริ่มทำงาน',
     running: 'กำลังประมวลผล',
+    awaiting_ac_review: 'รอตรวจทาน Acceptance Criteria',
+    awaiting_page_selection: 'รอเลือกหน้าทดสอบ',
     completed: 'เสร็จสมบูรณ์',
     incomplete: 'เสร็จบางส่วน',
     failed: 'ทำงานไม่สำเร็จ',
@@ -352,7 +569,24 @@ export default function SetupPage() {
       ? 'bg-amber-100 text-amber-800'
       : jobStatus === 'failed'
         ? 'bg-red-100 text-red-800'
-        : 'bg-blue-100 text-blue-800';
+        : jobStatus.startsWith('awaiting_')
+          ? 'bg-amber-100 text-amber-800'
+          : 'bg-blue-100 text-blue-800';
+  const displayedStageLabel = jobStatus === 'awaiting_ac_review'
+    ? 'ตรวจทานและยืนยัน Acceptance Criteria'
+    : jobStatus === 'awaiting_page_selection'
+      ? 'เลือกหน้าที่ต้องการทดสอบ'
+      : jobStageLabels[jobStage] ?? (jobStage || 'กำลังรอการประมวลผล');
+  const workflowStepLabels = ['สร้าง Acceptance Criteria', 'ตรวจทานและแก้ไข AC', 'เลือกหน้าเว็บ', 'ออกแบบ Test case', 'เสร็จสิ้น'];
+  const activeWorkflowStep = jobStatus === 'awaiting_ac_review'
+    ? 1
+    : jobStatus === 'awaiting_page_selection' || (jobStatus === 'running' && jobStage === 'discovery')
+      ? 2
+      : jobStatus === 'completed' || jobStatus === 'incomplete' || jobStatus === 'failed'
+        ? 4
+        : jobStage === 'planning' || jobStage === 'script'
+          ? 3
+          : 0;
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -470,9 +704,27 @@ export default function SetupPage() {
             </span>
           </div>
           <div className="space-y-4 p-5">
+            <ol className="grid gap-2 sm:grid-cols-5">
+              {workflowStepLabels.map((label, index) => {
+                const isDone = index < activeWorkflowStep || (index === 4 && jobStatus === 'completed');
+                const isActive = index === activeWorkflowStep && jobStatus !== 'completed';
+                return (
+                  <li
+                    key={label}
+                    className={`rounded-md border px-3 py-2 text-xs ${
+                      isDone ? 'border-green-200 bg-green-50 text-green-800'
+                        : isActive ? 'border-blue-300 bg-blue-50 font-semibold text-blue-800'
+                          : 'border-gray-200 bg-gray-50 text-gray-500'
+                    }`}
+                  >
+                    {index + 1}. {label}
+                  </li>
+                );
+              })}
+            </ol>
             <div>
               <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-                <span className="font-medium text-gray-700">{jobStageLabels[jobStage] ?? (jobStage || 'กำลังรอการประมวลผล')}</span>
+                <span className="font-medium text-gray-700">{displayedStageLabel}</span>
                 <span className="font-semibold tabular-nums text-blue-800">{Math.min(jobPercentage, 100)}%</span>
               </div>
               <div
@@ -487,6 +739,232 @@ export default function SetupPage() {
               </div>
               <p className="mt-2 text-sm text-gray-600">{jobMessage || 'กำลังรอการประมวลผล'}</p>
             </div>
+            {workflowError && <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{workflowError}</p>}
+            {jobStatus === 'awaiting_ac_review' && (
+              <section className="space-y-4 rounded-lg border border-amber-200 bg-amber-50/60 p-4">
+                <div>
+                  <h3 className="font-semibold text-gray-900">ขั้นที่ 2: ตรวจทาน Acceptance Criteria</h3>
+                  <p className="mt-1 text-sm text-gray-600">แก้ไข เพิ่ม ลบ หรือเลือกข้อกำหนดที่ต้องการใช้ก่อนให้ AI สำรวจเว็บไซต์</p>
+                </div>
+                {requirementUnitCount !== null && (
+                  <p className="text-sm text-gray-700">
+                    ระบบอ่าน Requirement ได้ {requirementUnitCount} ข้อ และสร้าง Acceptance Criteria ได้ {acceptanceCriteria.length} ข้อ
+                  </p>
+                )}
+                {analysisWarnings.length > 0 && (
+                  <div role="status" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    <p className="font-medium">มีปัญหาระหว่างวิเคราะห์ Requirement:</p>
+                    <ul className="mt-1 list-inside list-disc space-y-1">
+                      {analysisWarnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {requirementUnitCount === 0 && (
+                  <p role="alert" className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+                    ระบบไม่พบข้อกำหนดในข้อมูลที่ส่งมา กรุณาตรวจสอบข้อความหรือเพิ่ม Acceptance Criteria ด้วยตนเอง
+                  </p>
+                )}
+                {requirementUnitCount !== null && requirementUnitCount > 0 && acceptanceCriteria.length === 0 && analysisWarnings.length === 0 && (
+                  <p role="alert" className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+                    AI ไม่ได้ส่ง Acceptance Criteria ที่ระบบตรวจสอบรูปแบบได้ จึงไม่มีรายการให้แสดง กรุณาเพิ่ม Acceptance Criteria ด้วยตนเอง
+                  </p>
+                )}
+                <div className="space-y-3">
+                  {acceptanceCriteria.map(criterion => (
+                    <article key={criterion.id} className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <label className="flex items-center gap-2 text-sm font-medium text-gray-800">
+                          <input
+                            type="checkbox"
+                            checked={criterion.selectedByUser !== false}
+                            onChange={event => updateAcceptanceCriterion(criterion.id, 'selectedByUser', event.target.checked)}
+                          />
+                          ใช้ {criterion.id}
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setAcceptanceCriteria(criteria => criteria.filter(item => item.id !== criterion.id))}
+                          className="text-sm text-red-600 hover:text-red-800"
+                        >
+                          ลบ
+                        </button>
+                      </div>
+                      <label className="block text-xs font-medium text-gray-600">
+                        อ้างอิง Requirement
+                        <input
+                          value={criterion.requirementRef}
+                          onChange={event => updateAcceptanceCriterion(criterion.id, 'requirementRef', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-gray-600">
+                        สถานการณ์
+                        <textarea
+                          value={criterion.scenario}
+                          onChange={event => updateAcceptanceCriterion(criterion.id, 'scenario', event.target.value)}
+                          rows={2}
+                          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-gray-600">
+                        การกระทำ
+                        <textarea
+                          value={criterion.action}
+                          onChange={event => updateAcceptanceCriterion(criterion.id, 'action', event.target.value)}
+                          rows={2}
+                          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-gray-600">
+                        ผลลัพธ์ที่คาดหวัง
+                        <textarea
+                          value={criterion.expected}
+                          onChange={event => updateAcceptanceCriterion(criterion.id, 'expected', event.target.value)}
+                          rows={2}
+                          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-gray-600">
+                        สิ่งที่ต้องไม่เกิด
+                        <input
+                          value={criterion.mustNot}
+                          onChange={event => updateAcceptanceCriterion(criterion.id, 'mustNot', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-gray-600">
+                        ความกำกวม/หมายเหตุ
+                        <input
+                          value={criterion.ambiguity}
+                          onChange={event => updateAcceptanceCriterion(criterion.id, 'ambiguity', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <label className="text-xs font-medium text-gray-600">
+                          ประเภท
+                          <select
+                            value={criterion.category}
+                            onChange={event => updateAcceptanceCriterion(criterion.id, 'category', event.target.value as AcceptanceCriterionCategory)}
+                            className="mt-1 w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                          >
+                            <option value="happy_path">เส้นทางปกติ</option>
+                            <option value="validation">ตรวจสอบข้อมูล</option>
+                            <option value="negative">กรณีไม่สำเร็จ</option>
+                            <option value="boundary">ขอบเขตข้อมูล</option>
+                            <option value="access_control">สิทธิ์การเข้าถึง</option>
+                          </select>
+                        </label>
+                        <label className="text-xs font-medium text-gray-600">
+                          ความสำคัญ
+                          <select
+                            value={criterion.priority}
+                            onChange={event => updateAcceptanceCriterion(criterion.id, 'priority', event.target.value as AcceptanceCriterion['priority'])}
+                            className="mt-1 w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                          >
+                            <option value="required">จำเป็น</option>
+                            <option value="important">สำคัญ</option>
+                            <option value="optional">ไม่บังคับ</option>
+                          </select>
+                        </label>
+                        <label className="text-xs font-medium text-gray-600">
+                          วิธีตรวจ
+                          <select
+                            value={criterion.verification}
+                            onChange={event => updateAcceptanceCriterion(criterion.id, 'verification', event.target.value as AcceptanceCriterion['verification'])}
+                            className="mt-1 w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                          >
+                            <option value="automated">อัตโนมัติ</option>
+                            <option value="manual">ตรวจด้วยตนเอง</option>
+                          </select>
+                        </label>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={handleAddAcceptanceCriterion} className="rounded-md border border-blue-600 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50">
+                    เพิ่ม Acceptance Criteria
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmAcceptanceCriteria()}
+                    disabled={isWorkflowSubmitting || !acceptanceCriteria.some(criterion => criterion.selectedByUser !== false)}
+                    className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800 disabled:opacity-50"
+                  >
+                    {isWorkflowSubmitting ? 'กำลังบันทึก...' : 'ยืนยัน AC และค้นหาหน้าเว็บ'}
+                  </button>
+                </div>
+              </section>
+            )}
+            {jobStatus === 'awaiting_page_selection' && (
+              <section className="space-y-4 rounded-lg border border-blue-200 bg-blue-50/50 p-4">
+                <div>
+                  <h3 className="font-semibold text-gray-900">ขั้นที่ 3: เลือกหน้าที่ต้องการทดสอบ</h3>
+                  <p className="mt-1 text-sm text-gray-600">เลือกหน้าที่ตรงกับ Acceptance Criteria ระบบจะสำรวจเชิงลึกเฉพาะหน้าที่เลือก</p>
+                </div>
+                {!pageDiscoveryComplete && (
+                  <p role="status" className="rounded-md bg-amber-100 px-3 py-2 text-sm text-amber-900">
+                    สำรวจหน้าได้บางส่วน: {pageDiscoveryStopReason || `จำกัดไว้ที่ ${generationPages.length} หน้า`}
+                  </p>
+                )}
+                {unsupportedAcceptanceCriteria.length > 0 && (
+                  <p role="alert" className="rounded-md bg-amber-100 px-3 py-2 text-sm text-amber-900">
+                    หน้าที่เลือกยังไม่รองรับ: {unsupportedAcceptanceCriteria.map(criterion => criterion.id).join(', ')}. เลือกหน้าเพิ่มหรือยืนยันเพื่อดำเนินการต่อโดยรับทราบคำเตือน
+                  </p>
+                )}
+                {coverageWarnings.length > 0 && warningConfirmationRequired && (
+                  <p role="alert" className="rounded-md bg-amber-100 px-3 py-2 text-sm text-amber-900">
+                    คำเตือน: AC {coverageWarnings.join(', ')} ไม่มีหน้าที่เลือกแนะนำให้รองรับ กดปุ่มยืนยันอีกครั้งหากต้องการดำเนินการต่อ
+                  </p>
+                )}
+                {generationPages.length === 0 ? (
+                  <p className="text-sm text-gray-600">ไม่พบหน้าที่เลือกได้</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+                    <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
+                      <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-600">
+                        <tr>
+                          <th className="px-3 py-3">เลือก</th>
+                          <th className="px-3 py-3">ชื่อหน้า</th>
+                          <th className="px-3 py-3">URL pattern</th>
+                          <th className="px-3 py-3">ล็อกอิน</th>
+                          <th className="px-3 py-3">AC ที่เกี่ยวข้อง</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {generationPages.map(page => (
+                          <tr key={page.pageId}>
+                            <td className="px-3 py-3">
+                              <input
+                                type="checkbox"
+                                aria-label={`เลือกหน้า ${page.title}`}
+                                checked={selectedPageIds.includes(page.pageId)}
+                                onChange={event => handlePageSelectionChange(page.pageId, event.target.checked)}
+                              />
+                            </td>
+                            <td className="px-3 py-3 font-medium text-gray-800">{page.title}</td>
+                            <td className="max-w-sm break-all px-3 py-3 text-xs text-gray-600">{page.urlPattern}</td>
+                            <td className="px-3 py-3">{page.requiresLogin ? 'ต้องล็อกอิน' : 'ไม่ต้องล็อกอิน'}</td>
+                            <td className="px-3 py-3">{page.suggestedAcIds.length > 0 ? page.suggestedAcIds.join(', ') : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleConfirmPageSelection()}
+                  disabled={isWorkflowSubmitting || selectedPageIds.length === 0}
+                  className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800 disabled:opacity-50"
+                >
+                  {isWorkflowSubmitting
+                    ? 'กำลังเริ่มสำรวจ...'
+                    : warningConfirmationRequired ? 'รับทราบคำเตือนและเริ่ม' : 'ยืนยันหน้าที่เลือกและเริ่มออกแบบ'}
+                </button>
+              </section>
+            )}
             <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-gray-200 bg-gray-200 sm:grid-cols-4">
               <div className="bg-white px-3 py-3">
                 <dt className="text-xs text-gray-500">Test case</dt>

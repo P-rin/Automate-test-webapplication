@@ -61,6 +61,18 @@ export interface AcceptanceCriterion {
   priority: "required" | "important" | "optional";
   verification: "automated" | "manual";
   ambiguity: string;
+  selectedByUser?: boolean;
+  confirmedByUser?: boolean;
+}
+
+export interface GenerationPage {
+  pageId: string;
+  title: string;
+  urlPattern: string;
+  sampleUrl: string;
+  depth: number;
+  requiresLogin: boolean;
+  suggestedAcIds: string[];
 }
 
 export interface GeneratedTestCase {

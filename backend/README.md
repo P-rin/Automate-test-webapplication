@@ -8,6 +8,7 @@ Node.js + Express + TypeScript backend for generating Playwright test scripts, s
 - `GET /api/auth/session`: validate backend session token.
 - `POST /api/auth/logout`: revoke backend session token.
 - `POST /api/generate`, `/api/generate-job`, `/api/v2/generate-job`, `/api/generate-test`: require a Firebase ID token, explore the app via Playwright MCP, then generate test plans and scripts with Ollama.
+- `/api/v2/generate-job` accepts `humanReview=true` to pause after AI acceptance criteria and after page discovery. Review with `GET/PUT /api/v2/generation-jobs/:jobId/acceptance-criteria`, then confirm with `POST /api/v2/generation-jobs/:jobId/acceptance-criteria/confirm`. Read discovered pages with `GET /api/v2/generation-jobs/:jobId/pages`, then confirm selected `pageIds` with `POST /api/v2/generation-jobs/:jobId/pages/confirm`.
 - `POST /api/save-test`: persist generated test case to Firestore.
 - `POST /api/execute`: run selected test cases with Playwright (`npx playwright test`) and update Firestore in real-time.
 - `GET /health`: liveness check.
@@ -60,6 +61,9 @@ Environment keys:
 - `PLAYWRIGHT_EXPLORE_MAX_SNAPSHOTS` = max number of snapshots to collect during MCP exploration
 - `PLAYWRIGHT_EXPLORE_MAX_CANDIDATES` = max number of clickable candidates to explore after the base snapshot
 - `PLAYWRIGHT_EXPLORE_MAX_DEPTH` = max crawl depth for internal route exploration
+- `GENERATION_JOB_MAX_PAGES` = maximum pages in the human-review page selection list (default `30`)
+- `GENERATION_JOB_PAGE_MAX_DEPTH` = maximum BFS depth during page discovery (default `3`)
+- `GENERATION_JOB_PAGE_MAX_NAVIGATION_ACTIONS` = maximum shallow navigation clicks per page (default `5`)
 
 For localhost OAuth testing with HTTPS public URL, see [TUNNELING.md](./TUNNELING.md).
 
@@ -79,6 +83,7 @@ Default backend URL: `http://localhost:4000`.
 - Ollama performs planner and script-generation passes and can call an allowlisted set of Playwright MCP tools with a bounded number of calls.
 - Generation now uses multi-step MCP exploration rather than a single snapshot: initial page, credential-driven login attempt when credentials are found in uploaded specs, then additional navigation snapshots from important buttons/links.
 - Generation jobs default to safe planning: the planner stops at confirmation screens for purchases, payments, deletions, and account changes unless `allowMutatingTests` is explicitly enabled for a test environment.
+- Legacy generation requests keep the original one-shot flow unless `/api/v2/generate-job` receives `humanReview=true`. Human-review jobs store discovered pages in `generationJobs/{jobId}/pages`, detailed snapshots in `snapshots`, and link planned cases to their selected `pageId`.
 - Backend can be configured with environment variables to control MCP startup:
   - `PLAYWRIGHT_MCP_COMMAND` — custom command to launch MCP server (default `playwright-mcp`, `npx` is blocked)
   - `PLAYWRIGHT_MCP_ARGS` — optional CLI args array for the MCP command

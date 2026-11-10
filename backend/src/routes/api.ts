@@ -15,14 +15,19 @@ import { generateTestsTwoPass } from "../services/ollamaService.js";
 import { requireFirebaseAuth } from "../services/firebaseAuthService.js";
 import {
   createGenerationJob,
+  confirmGenerationJobAcceptanceCriteria,
+  confirmGenerationJobPages,
   GenerationRetryError,
   getGenerationJob,
+  getGenerationJobAcceptanceCriteria,
   listFailedGenerationCases,
   listGenerationJobs,
   listGenerationJobCases,
+  listGenerationJobPages,
   processGenerateJob,
   retryFailedGenerationCase,
   startGenerationJobScriptGeneration,
+  updateGenerationJobAcceptanceCriteria,
 } from "../services/generationJobService.js";
 import { getTestRun, startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
@@ -58,6 +63,36 @@ const generateJobScriptsSchema = z.object({
     (caseIds) => !caseIds || new Set(caseIds).size === caseIds.length,
     "caseIds must not contain duplicates",
   ),
+});
+
+const acceptanceCriterionSchema = z.object({
+  id: z.string().min(1),
+  requirementRef: z.string(),
+  scenario: z.string(),
+  action: z.string(),
+  expected: z.string(),
+  mustNot: z.string(),
+  category: z.enum(["happy_path", "validation", "negative", "boundary", "access_control"]),
+  priority: z.enum(["required", "important", "optional"]),
+  verification: z.enum(["automated", "manual"]),
+  ambiguity: z.string(),
+  selectedByUser: z.boolean().optional(),
+  confirmedByUser: z.boolean().optional(),
+});
+
+const acceptanceCriteriaSchema = z.object({
+  criteria: z.array(acceptanceCriterionSchema).max(100).refine(
+    (criteria) => new Set(criteria.map((criterion) => criterion.id)).size === criteria.length,
+    "Acceptance criterion IDs must be unique",
+  ),
+});
+
+const confirmGenerationPagesSchema = z.object({
+  pageIds: z.array(z.string().min(1)).min(1).max(100).refine(
+    (pageIds) => new Set(pageIds).size === pageIds.length,
+    "pageIds must not contain duplicates",
+  ),
+  confirmCoverageWarnings: z.boolean().optional(),
 });
 
 const isAcceptanceCriterion = (value: unknown): value is AcceptanceCriterion => {
@@ -346,6 +381,98 @@ apiRouter.get("/v2/generation-jobs/:jobId/coverage.md", requireFirebaseAuth, asy
   }
 });
 
+apiRouter.get("/v2/generation-jobs/:jobId/acceptance-criteria", requireFirebaseAuth, async (req, res) => {
+  try {
+    const review = await getGenerationJobAcceptanceCriteria(req.params.jobId, getFirebaseUid(res));
+    return res.json(review);
+  } catch (error) {
+    if (error instanceof GenerationRetryError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(message === "Generation job not found" ? 404 : 500).json({ error: message });
+  }
+});
+
+apiRouter.put("/v2/generation-jobs/:jobId/acceptance-criteria", requireFirebaseAuth, async (req, res) => {
+  try {
+    const payload = acceptanceCriteriaSchema.parse(req.body);
+    await updateGenerationJobAcceptanceCriteria(
+      req.params.jobId,
+      getFirebaseUid(res),
+      payload.criteria,
+    );
+    return res.json({ criteria: payload.criteria });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: "Invalid acceptance criteria", details: error.flatten() });
+    }
+    if (error instanceof GenerationRetryError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(message === "Generation job not found" ? 404 : 500).json({ error: message });
+  }
+});
+
+apiRouter.post("/v2/generation-jobs/:jobId/acceptance-criteria/confirm", requireFirebaseAuth, async (req, res) => {
+  try {
+    const payload = await confirmGenerationJobAcceptanceCriteria(req.params.jobId, getFirebaseUid(res));
+    void processGenerateJob(req.params.jobId, payload, buildLlmGenerationOptions());
+    return res.status(202).json({ status: "accepted", jobStatus: "running" });
+  } catch (error) {
+    if (error instanceof GenerationRetryError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(message === "Generation job not found" ? 404 : 500).json({ error: message });
+  }
+});
+
+apiRouter.get("/v2/generation-jobs/:jobId/pages", requireFirebaseAuth, async (req, res) => {
+  try {
+    const ownerUid = getFirebaseUid(res);
+    const [job, pages] = await Promise.all([
+      getGenerationJob(req.params.jobId, ownerUid),
+      listGenerationJobPages(req.params.jobId, ownerUid),
+    ]);
+    return res.json({
+      pages,
+      complete: job.pageDiscoveryComplete ?? true,
+      stopReason: job.pageDiscoveryStopReason ?? "",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(message === "Generation job not found" ? 404 : 500).json({ error: message });
+  }
+});
+
+apiRouter.post("/v2/generation-jobs/:jobId/pages/confirm", requireFirebaseAuth, async (req, res) => {
+  try {
+    const payload = confirmGenerationPagesSchema.parse(req.body);
+    const result = await confirmGenerationJobPages(
+      req.params.jobId,
+      getFirebaseUid(res),
+      payload.pageIds,
+      payload.confirmCoverageWarnings ?? false,
+    );
+    if (!result.confirmed || !result.payload) {
+      return res.json({ confirmed: false, warnings: result.warnings });
+    }
+    void processGenerateJob(req.params.jobId, result.payload, buildLlmGenerationOptions());
+    return res.status(202).json({ confirmed: true, status: "accepted", warnings: result.warnings });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: "Invalid page selection", details: error.flatten() });
+    }
+    if (error instanceof GenerationRetryError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return res.status(message === "Generation job not found" ? 404 : 500).json({ error: message });
+  }
+});
+
 apiRouter.get("/v2/generation-jobs/:jobId", requireFirebaseAuth, async (req, res) => {
   try {
     const rawCursor = typeof req.query.since === "string" ? req.query.since : "";
@@ -502,6 +629,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
     const projectName = String(req.body.projectName ?? targetUrl);
     const inlineRequirements = String(req.body.requirements ?? "").trim();
     const allowMutatingTests = req.body.allowMutatingTests === true || req.body.allowMutatingTests === "true";
+    const humanReview = req.body.humanReview === true || req.body.humanReview === "true";
 
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
@@ -516,6 +644,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
       targetUrl,
       specification: effectiveSpecification,
       allowMutatingTests,
+      humanReview,
       ownerUid: getFirebaseUid(res),
     });
 
@@ -524,6 +653,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
       targetUrl,
       specification: effectiveSpecification,
       allowMutatingTests,
+      humanReview,
     }, buildLlmGenerationOptions());
 
     return res.status(202).json({
