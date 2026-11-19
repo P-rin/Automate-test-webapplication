@@ -88,6 +88,21 @@ export interface ElementInventory {
   omittedRepeatedGroups: { label: string; omittedCount: number; setId: string }[];
 }
 
+export type CandidateCategory = "happy_path" | "validation" | "negative" | "boundary" | "access_control";
+
+/** A case the LLM proposes beyond the templates (Phase 4e), already validated against the inventory. */
+export interface ExploratoryCase {
+  titleTh: string;
+  descriptionTh: string;
+  category: CandidateCategory | "exploratory";
+  requirementIds: string[];
+  targetElementId: string;
+  inputVariant: string;
+  steps: StructuredStep[];
+  oracle: Oracle;
+  expectedResultTh: string;
+}
+
 /** Structured step: compiled to Playwright by code (Phase 6). */
 export type StructuredStep =
   | { kind: "goto"; url: string }
