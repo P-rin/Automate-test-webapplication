@@ -16,5 +16,35 @@
       "Add to cart",
       "(อีก 3 ชิ้นรูปแบบเดียวกับ G1)"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "combobox",
+      "purpose": "sort",
+      "name": "Sort products"
+    },
+    {
+      "role": "button",
+      "purpose": "cart_badge",
+      "name": "Cart, empty"
+    },
+    {
+      "role": "button",
+      "purpose": "add_to_cart",
+      "name": "Add to cart",
+      "groupId": "G1"
+    },
+    {
+      "role": "text",
+      "purpose": "price",
+      "text": "$29.99",
+      "groupId": "G1"
+    },
+    {
+      "role": "button",
+      "purpose": "generic_button",
+      "name": "View details for Sauce Labs Backpack",
+      "groupId": "G1"
+    }
+  ]
 }

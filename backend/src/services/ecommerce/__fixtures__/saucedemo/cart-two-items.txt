@@ -80,3 +80,7 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
           - /url: https://www.linkedin.com/company/sauce-labs/
     - generic [ref=f10e63]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
 ```
+### Element Attributes
+```json
+[{"role":"button","name":"Open Menu","tag":"button","type":"button","id":"react-burger-menu-btn"},{"role":"button","name":"Cart, 2 items","tag":"a","testId":"shopping-cart-link"},{"role":"button","name":"View details for Sauce Labs Backpack","tag":"a","id":"item_4_title_link","testId":"item-4-title-link"},{"role":"button","name":"Remove","tag":"button","htmlName":"remove-sauce-labs-backpack","id":"remove-sauce-labs-backpack","testId":"remove-sauce-labs-backpack"},{"role":"button","name":"View details for Sauce Labs Bike Light","tag":"a","id":"item_0_title_link","testId":"item-0-title-link"},{"role":"button","name":"Remove","tag":"button","htmlName":"remove-sauce-labs-bike-light","id":"remove-sauce-labs-bike-light","testId":"remove-sauce-labs-bike-light"},{"role":"button","name":"Continue Shopping","tag":"button","htmlName":"continue-shopping","id":"continue-shopping","testId":"continue-shopping"},{"role":"button","name":"Checkout","tag":"button","htmlName":"checkout","id":"checkout","testId":"checkout"},{"role":"link","name":"X","tag":"a","testId":"social-x"},{"role":"link","name":"Facebook","tag":"a","testId":"social-facebook"},{"role":"link","name":"LinkedIn","tag":"a","testId":"social-linkedin"}]
+```

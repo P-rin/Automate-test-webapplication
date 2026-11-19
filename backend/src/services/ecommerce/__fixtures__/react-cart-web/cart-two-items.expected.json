@@ -15,5 +15,46 @@
       "ยอดรวม: ฿53,890",
       "ดำเนินการชำระเงิน"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "button",
+      "purpose": "quantity",
+      "name": "-",
+      "groupId": "G1"
+    },
+    {
+      "role": "button",
+      "purpose": "quantity",
+      "name": "+",
+      "groupId": "G1"
+    },
+    {
+      "role": "button",
+      "purpose": "remove_from_cart",
+      "name": "ลบสินค้า",
+      "groupId": "G2"
+    },
+    {
+      "role": "text",
+      "purpose": "price",
+      "text": "฿7,990 ต่อชิ้น",
+      "groupId": "G1"
+    },
+    {
+      "role": "text",
+      "purpose": "subtotal",
+      "name": "ยอดรวม"
+    },
+    {
+      "role": "text",
+      "purpose": "cart_badge",
+      "name": "จำนวนสินค้าทั้งหมด"
+    },
+    {
+      "role": "link",
+      "purpose": "checkout_button",
+      "name": "ดำเนินการชำระเงิน"
+    }
+  ]
 }

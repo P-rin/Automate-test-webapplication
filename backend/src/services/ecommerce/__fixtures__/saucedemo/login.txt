@@ -12,7 +12,7 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
 - [id="login_button_container"] <div>
 - [data-test="login-credentials-container"] <div> "Accepted usernames are: standa"
 - [data-test="login-credentials"] <div> "Accepted usernames are: standa"
-- [data-test="login-password"] <div> "Password for all users: secret"
+- [data-test="login-password"] <div> "Password for all users: <redacted>"
 ### Snapshot
 ```yaml
 - generic [ref=e3]:
@@ -31,4 +31,8 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
         - text: ********
 ```
 ### Events
-- New console entries: .playwright-mcp\console-2026-11-19T05-11-43-648Z.log#L1-L2
+- New console entries: .playwright-mcp\console-2026-11-19T06-20-41-056Z.log#L1-L2
+### Element Attributes
+```json
+[{"role":"textbox","name":"Username","tag":"input","type":"text","placeholder":"Username","htmlName":"user-name","id":"user-name","testId":"username","formButtons":["Login"]},{"role":"textbox","name":"Password","tag":"input","type":"password","placeholder":"Password","htmlName":"password","id":"password","testId":"password","formButtons":["Login"]},{"role":"button","name":"Login","tag":"input","type":"submit","htmlName":"login-button","id":"login-button","testId":"login-button"}]
+```

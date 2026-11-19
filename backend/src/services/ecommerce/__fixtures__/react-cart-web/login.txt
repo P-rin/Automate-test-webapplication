@@ -49,3 +49,7 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
       - link "กลับไปเลือกชมสินค้า" [ref=f7e31] [cursor=pointer]:
         - /url: /products#storefront
 ```
+### Element Attributes
+```json
+[{"role":"link","name":"หน้าแรก","tag":"a"},{"role":"link","name":"สินค้าทั้งหมด","tag":"a"},{"role":"link","name":"บัญชีของฉัน","tag":"a"},{"role":"link","name":"รายการโปรด","tag":"a"},{"role":"link","name":"ตะกร้าสินค้า","tag":"a"},{"role":"link","name":"คำสั่งซื้อ","tag":"a"},{"role":"link","name":"เข้าสู่ระบบ","tag":"a"},{"role":"link","name":"สมัครสมาชิก","tag":"a"},{"role":"textbox","name":"อีเมล","tag":"input","type":"email","placeholder":"กรอกอีเมลของคุณ","autocomplete":"email","formButtons":["เข้าสู่ระบบ"]},{"role":"textbox","name":"รหัสผ่าน","tag":"input","type":"password","placeholder":"••••••••","autocomplete":"current-password","formButtons":["เข้าสู่ระบบ"]},{"role":"button","name":"เข้าสู่ระบบ","tag":"button","type":"submit"},{"role":"link","name":"สมัครสมาชิก","tag":"a"},{"role":"link","name":"กลับไปเลือกชมสินค้า","tag":"a"}]
+```

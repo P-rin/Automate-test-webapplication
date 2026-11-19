@@ -34,3 +34,50 @@ export const matchesTerm = (text: string, term: string): boolean => {
 
 export const matchesAnyTerm = (text: string, terms: readonly string[]): boolean =>
   terms.some((term) => matchesTerm(text, term));
+
+// ---------------------------------------------------------------------------------------------
+// Element purpose clues (Phase 3). Matched against name / label / placeholder / HTML name / id /
+// autocomplete / options / nearby text, with matchesTerm (English whole word, Thai substring).
+
+export const PURPOSE_TERMS = {
+  search: ["search", "find", "lookup", "ค้นหา", "หาสินค้า"],
+  quantity: ["qty", "quantity", "amount", "จำนวน"],
+  coupon: ["coupon", "promo", "promo code", "promotion code", "voucher", "discount code", "gift card", "redeem", "โค้ดส่วนลด", "คูปอง", "รหัสส่วนลด", "โค้ดโปรโมชั่น", "บัตรกำนัล"],
+  review_comment: ["review", "comment", "comments", "feedback", "ความคิดเห็น", "รีวิว", "ความเห็น", "ติชม"],
+  email: ["email", "e-mail", "mail", "อีเมล", "อีเมล์"],
+  password: ["password", "passcode", "pwd", "รหัสผ่าน"],
+  name: ["name", "first name", "last name", "full name", "username", "user name", "recipient", "given name", "family name", "ชื่อ", "นามสกุล", "ผู้รับ", "ชื่อผู้ใช้"],
+  phone: ["phone", "tel", "telephone", "mobile", "contact number", "เบอร์", "โทรศัพท์", "มือถือ", "เบอร์โทร"],
+  address: ["address", "street", "city", "district", "province", "state", "country", "region", "ที่อยู่", "ถนน", "เขต", "อำเภอ", "ตำบล", "แขวง", "จังหวัด", "ประเทศ"],
+  postal_code: ["zip", "zip code", "postal", "postal code", "postcode", "post code", "รหัสไปรษณีย์", "ไปรษณีย์"],
+  card_number: ["card number", "credit card", "card no", "cc number", "cardnumber", "เลขบัตร", "หมายเลขบัตร", "บัตรเครดิต"],
+  add_to_cart: ["add to cart", "add to bag", "add to basket", "buy", "buy now", "เพิ่มลงตะกร้า", "ใส่ตะกร้า", "หยิบใส่ตะกร้า", "ซื้อ", "ซื้อเลย"],
+  remove_from_cart: ["remove", "delete", "ลบ", "นำออก"],
+  checkout_button: ["checkout", "check out", "proceed to checkout", "place order", "ชำระเงิน", "ดำเนินการสั่งซื้อ", "สั่งซื้อสินค้า"],
+  cart_badge: ["cart", "basket", "bag", "shopping cart", "ตะกร้า", "รถเข็น"],
+  sort: ["sort", "sort by", "order by", "low to high", "high to low", "a to z", "z to a", "newest", "price ascending", "price descending", "เรียง", "จัดเรียง", "ราคาต่ำ", "ราคาสูง", "ใหม่ล่าสุด", "ขายดี"],
+  filter: ["filter", "category", "categories", "brand", "type", "หมวด", "หมวดหมู่", "ประเภท", "กรอง", "แบรนด์", "ยี่ห้อ"],
+  // No bare "หมด": it is inside "ทั้งหมด" (all) and "โหมด" (mode).
+  stock_status: ["in stock", "out of stock", "sold out", "stock", "left", "available", "unavailable", "คงเหลือ", "สินค้าหมด", "หมดแล้ว", "หมดสต็อก", "สต็อก", "พร้อมส่ง"],
+  subtotal: ["subtotal", "sub-total", "sub total", "item total", "items total", "ยอดรวม", "ยอดรวมสินค้า", "รวมเป็นเงิน"],
+  total: ["total", "grand total", "order total", "net total", "amount due", "ยอดสุทธิ", "รวมทั้งสิ้น", "ยอดชำระ", "ยอดที่ต้องชำระ"],
+} as const;
+
+/** Item-count summaries that stand in for a header cart badge (e.g. "Items in cart: 2"). */
+export const CART_COUNT_TERMS = ["items in cart", "total items", "item count", "cart items", "จำนวนสินค้าทั้งหมด", "จำนวนสินค้าในตะกร้า", "จำนวนชิ้น"];
+/** Fees next to totals; their amounts are not product prices. */
+export const FEE_TERMS = ["tax", "vat", "shipping", "delivery", "discount", "fee", "ภาษี", "ค่าจัดส่ง", "ค่าส่ง", "ส่วนลด", "ค่าธรรมเนียม"];
+/** Free-text fields that are not reviews: delivery notes, remarks. */
+export const NOTE_TERMS = ["note", "notes", "remark", "remarks", "instruction", "instructions", "special request", "หมายเหตุ", "ข้อความถึง", "คำแนะนำในการจัดส่ง"];
+/** Things that are not the shopping cart even if they say "remove"/"add". */
+export const WISHLIST_TERMS = ["wishlist", "wish list", "favorite", "favourite", "saved", "รายการโปรด", "ชอบ", "บันทึกไว้"];
+/** Section/heading words that put a free-text field in a review context. */
+export const REVIEW_SECTION_TERMS = ["review", "reviews", "comment", "comments", "rating", "รีวิว", "ความคิดเห็น", "ให้คะแนน"];
+/** Buttons that submit a review / apply a coupon / run a search. */
+export const SUBMIT_REVIEW_TERMS = ["post", "submit", "send", "publish", "ส่ง", "โพสต์", "แสดงความคิดเห็น"];
+export const APPLY_COUPON_TERMS = ["apply", "redeem", "ใช้โค้ด", "ใช้คูปอง", "ยืนยันโค้ด"];
+export const SEARCH_BUTTON_TERMS = ["search", "go", "find", "ค้นหา"];
+/** Stepper controls next to a quantity (bare "plus"/"minus" only as the whole label: "XPS 13 Plus" is a product). */
+export const STEPPER_TERMS = ["increase quantity", "decrease quantity", "increase", "decrease", "increment", "decrement", "เพิ่มจำนวน", "ลดจำนวน"];
+/** Order history / order wording that contains "ซื้อ" (buy) but is not an add-to-cart button. */
+export const ORDER_TERMS = ["คำสั่งซื้อ", "ประวัติการสั่งซื้อ", "การสั่งซื้อ", "order history", "my orders", "orders"];

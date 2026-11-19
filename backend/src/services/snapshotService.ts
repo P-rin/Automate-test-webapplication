@@ -297,6 +297,146 @@ export const insertTestIdSection = (snapshot: string, section: string): string =
     : `${snapshot}\n${section}`;
 };
 
+/** One interactive element's DOM attributes (the accessibility snapshot does not show them). */
+export interface ElementAttributeEntry {
+  /** Explicit role, or the implicit role of the tag/type (searchbox, spinbutton, textbox, combobox, ...). */
+  role: string;
+  /** Approximate accessible name: aria-label, label text, content text with image alt, placeholder, title. */
+  name: string;
+  tag: string;
+  type?: string;
+  placeholder?: string;
+  htmlName?: string;
+  id?: string;
+  autocomplete?: string;
+  inputMode?: string;
+  required?: boolean;
+  disabled?: boolean;
+  min?: string;
+  max?: string;
+  maxLength?: number;
+  pattern?: string;
+  testId?: string;
+  /** "search" when inside role=search / a search form. */
+  formRole?: string;
+  /** Labels of up to 3 buttons in the same form (e.g. "Apply" next to a coupon field). */
+  formButtons?: string[];
+}
+
+export const ELEMENT_ATTRIBUTES_MAX_ENTRIES = 150;
+
+/**
+ * Read-only: collects attributes of visible interactive elements in document order. Used by the e-commerce
+ * element classifier (ECOMMERCE_TESTGEN_CONTEXT.md Phase 3a); never clicks or changes the page.
+ */
+export const COLLECT_ELEMENT_ATTRS_FUNCTION = `() => {
+  const selector = "input:not([type=hidden]), select, textarea, button, a[href], [role=button], [role=link], [role=textbox], [role=searchbox], [role=combobox], [role=spinbutton], [role=checkbox], [role=radio], [role=switch], [contenteditable=true]";
+  const clean = (value, max) => String(value || "").replace(/\\s+/g, " ").trim().slice(0, max || 80);
+  const implicitRole = (el) => {
+    const explicit = el.getAttribute("role");
+    if (explicit) return explicit.split(" ")[0];
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    if (tag === "a") return "link";
+    if (tag === "button") return "button";
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return el.multiple || el.size > 1 ? "listbox" : "combobox";
+    if (tag === "input") {
+      if (["button", "submit", "reset", "image"].includes(type)) return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "number") return "spinbutton";
+      if (type === "range") return "slider";
+      if (type === "search") return el.getAttribute("list") ? "combobox" : "searchbox";
+      return el.getAttribute("list") ? "combobox" : "textbox";
+    }
+    return el.isContentEditable ? "textbox" : tag;
+  };
+  const contentText = (node) => {
+    let text = "";
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3) text += " " + child.textContent;
+      else if (child.nodeType === 1) {
+        if (child.getAttribute("aria-hidden") === "true") continue;
+        if (child.tagName === "IMG") text += " " + (child.getAttribute("alt") || "");
+        else text += " " + contentText(child);
+      }
+    }
+    return text;
+  };
+  const accessibleName = (el) => {
+    const aria = el.getAttribute("aria-label");
+    if (aria) return clean(aria);
+    const labelledBy = el.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      const text = labelledBy.split(/\\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((node) => node.textContent).join(" ");
+      if (clean(text)) return clean(text);
+    }
+    if (el.labels && el.labels.length) {
+      const text = Array.from(el.labels).map((label) => contentText(label)).join(" ");
+      if (clean(text)) return clean(text);
+    }
+    const tag = el.tagName.toLowerCase();
+    if (tag === "input" && ["button", "submit", "reset"].includes((el.type || "").toLowerCase())) return clean(el.value);
+    if (!["input", "select", "textarea"].includes(tag)) {
+      const text = clean(contentText(el));
+      if (text) return text;
+    }
+    return clean(el.getAttribute("placeholder") || el.getAttribute("title") || "");
+  };
+  const testIdOf = (el) => ["data-test", "data-testid", "data-test-id", "data-qa", "data-cy"].map((attr) => el.getAttribute(attr)).find(Boolean) || "";
+  const entries = [];
+  for (const el of document.querySelectorAll(selector)) {
+    if (entries.length >= ${ELEMENT_ATTRIBUTES_MAX_ENTRIES}) break;
+    if (el.getClientRects().length === 0) continue;
+    const form = el.closest("form");
+    const searchScope = el.closest("[role=search]") || (form && (form.getAttribute("role") === "search" || /search/i.test(form.getAttribute("action") || "")) ? form : null);
+    const entry = { role: implicitRole(el), name: accessibleName(el), tag: el.tagName.toLowerCase() };
+    const put = (key, value) => { if (value !== undefined && value !== null && value !== "" && value !== false) entry[key] = value; };
+    put("type", (el.getAttribute("type") || "").toLowerCase());
+    put("placeholder", clean(el.getAttribute("placeholder")));
+    put("htmlName", clean(el.getAttribute("name"), 40));
+    put("id", clean(el.id, 40));
+    put("autocomplete", clean(el.getAttribute("autocomplete"), 40));
+    put("inputMode", clean(el.getAttribute("inputmode"), 20));
+    put("required", el.required === true || el.getAttribute("aria-required") === "true");
+    put("disabled", el.disabled === true || el.getAttribute("aria-disabled") === "true");
+    put("min", clean(el.getAttribute("min"), 20));
+    put("max", clean(el.getAttribute("max"), 20));
+    const maxLength = Number(el.getAttribute("maxlength"));
+    if (maxLength > 0) entry.maxLength = maxLength;
+    put("pattern", clean(el.getAttribute("pattern"), 80));
+    put("testId", clean(testIdOf(el), 60));
+    put("formRole", searchScope ? "search" : "");
+    if (form && !["button", "a"].includes(entry.tag)) {
+      const buttons = Array.from(form.querySelectorAll("button, input[type=submit], input[type=button]"))
+        .filter((button) => button !== el).map((button) => accessibleName(button)).filter(Boolean).slice(0, 3);
+      if (buttons.length) entry.formButtons = buttons;
+    }
+    entries.push(entry);
+  }
+  return JSON.stringify(entries);
+}`;
+
+export const ELEMENT_ATTRIBUTES_HEADER = "### Element Attributes";
+
+/** Appended after the YAML tree so legacy prompt truncation (which keeps the head) never depends on it. */
+export const appendElementAttributeSection = (snapshot: string, entries: ElementAttributeEntry[]): string =>
+  entries.length === 0
+    ? snapshot
+    : `${snapshot.trimEnd()}\n${ELEMENT_ATTRIBUTES_HEADER}\n\`\`\`json\n${JSON.stringify(entries)}\n\`\`\`\n`;
+
+const collectElementAttributes = async (client: Client): Promise<ElementAttributeEntry[]> => {
+  try {
+    const result = await client.callTool({ name: "browser_evaluate", arguments: { function: COLLECT_ELEMENT_ATTRS_FUNCTION } });
+    const entries = parseBrowserEvaluateResult(result);
+    return Array.isArray(entries) ? entries as ElementAttributeEntry[] : [];
+  } catch (error) {
+    console.warn("collectElementAttributes failed; continuing without element attributes:", error instanceof Error ? error.message : error);
+    return [];
+  }
+};
+
 const collectTestIdSection = async (client: Client): Promise<string> => {
   try {
     const result = await client.callTool({ name: "browser_evaluate", arguments: { function: COLLECT_TEST_IDS_FUNCTION } });
@@ -315,7 +455,12 @@ const collectSnapshot = async (client: Client, title: string): Promise<SnapshotS
     const snapshotText = getToolText(snapshotResult);
 
     if (snapshotText && hasMeaningfulSnapshotTree(snapshotText)) {
-      return { title, snapshot: insertTestIdSection(snapshotText, await collectTestIdSection(client)) };
+      const withTestIds = insertTestIdSection(snapshotText, await collectTestIdSection(client));
+      // E-commerce mode only: legacy snapshots (and therefore legacy prompts) stay unchanged.
+      const snapshot = env.generationMode === "ecommerce"
+        ? appendElementAttributeSection(withTestIds, await collectElementAttributes(client))
+        : withTestIds;
+      return { title, snapshot };
     }
   }
 

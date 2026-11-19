@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 
 import {
+  appendElementAttributeSection,
+  COLLECT_ELEMENT_ATTRS_FUNCTION,
   buildBrowserSessionRestoreFunction,
   formatTestIdSection,
   insertTestIdSection,
@@ -175,4 +177,50 @@ test("test ID section stays within budget and keeps repeated containers and cont
   assert.match(lines[2], /inventory-item/);
   assert.match(lines[3], /username/);
   assert.match(section, /more omitted\)/);
+});
+
+/** Minimal DOM stand-in for COLLECT_ELEMENT_ATTRS_FUNCTION (only what the function reads). */
+const fakeElement = (tag: string, attributes: Record<string, string>, extra: Record<string, unknown> = {}) => ({
+  nodeType: 1,
+  tagName: tag.toUpperCase(),
+  id: attributes.id ?? "",
+  childNodes: [] as unknown[],
+  labels: [] as unknown[],
+  getAttribute: (name: string) => attributes[name] ?? null,
+  getClientRects: () => [{}],
+  closest: () => null,
+  ...extra,
+});
+
+test("COLLECT_ELEMENT_ATTRS_FUNCTION reports implicit roles, names and form attributes without touching the page", () => {
+  const text = (value: string) => ({ nodeType: 3, textContent: value });
+  const image = fakeElement("img", { alt: "Backpack" });
+  const label = { childNodes: [text("Quantity")] };
+  const elements = [
+    fakeElement("input", { type: "number", min: "1", max: "10", name: "qty" }, { labels: [label], required: true }),
+    fakeElement("input", { type: "search", placeholder: "Search products" }),
+    fakeElement("textarea", { placeholder: "Write a review", maxlength: "500" }),
+    fakeElement("a", { href: "/p/1", "data-test": "item-link" }, { childNodes: [image, text(" -10%")] }),
+    fakeElement("button", { "aria-label": "Add to cart", disabled: "" }, { disabled: true }),
+    fakeElement("button", { type: "button" }, { getClientRects: () => [] }),
+  ];
+  const result = runInNewContext(`(${COLLECT_ELEMENT_ATTRS_FUNCTION})()`, {
+    document: { querySelectorAll: () => elements, getElementById: () => null },
+  }) as string;
+  assert.deepEqual(JSON.parse(result), [
+    { role: "spinbutton", name: "Quantity", tag: "input", type: "number", htmlName: "qty", required: true, min: "1", max: "10" },
+    { role: "searchbox", name: "Search products", tag: "input", type: "search", placeholder: "Search products" },
+    { role: "textbox", name: "Write a review", tag: "textarea", placeholder: "Write a review", maxLength: 500 },
+    { role: "link", name: "Backpack -10%", tag: "a", testId: "item-link" },
+    { role: "button", name: "Add to cart", tag: "button", disabled: true },
+  ], "invisible elements are skipped");
+  assert.doesNotMatch(COLLECT_ELEMENT_ATTRS_FUNCTION, /\.(click|focus|submit|dispatchEvent|setAttribute|remove)\(/, "read-only");
+});
+
+test("element attributes are appended after the snapshot tree as a JSON section", () => {
+  const snapshot = "### Page\n- Page URL: https://shop.example/\n### Snapshot\n```yaml\n- button \"Buy\" [ref=e1]\n```";
+  assert.equal(appendElementAttributeSection(snapshot, []), snapshot);
+  const withAttributes = appendElementAttributeSection(snapshot, [{ role: "button", name: "Buy", tag: "button" }]);
+  assert.ok(withAttributes.startsWith(snapshot));
+  assert.match(withAttributes, /### Element Attributes\n```json\n\[\{"role":"button","name":"Buy","tag":"button"\}\]\n```\n$/);
 });

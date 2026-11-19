@@ -59,3 +59,7 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
           - /url: https://www.linkedin.com/company/sauce-labs/
     - generic [ref=e156]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
 ```
+### Element Attributes
+```json
+[{"role":"button","name":"Open Menu","tag":"button","type":"button","id":"react-burger-menu-btn"},{"role":"button","name":"Cart, empty","tag":"a","testId":"shopping-cart-link"},{"role":"button","name":"Back to products","tag":"button","htmlName":"back-to-products","id":"back-to-products","testId":"back-to-products"},{"role":"button","name":"Add to cart","tag":"button","htmlName":"add-to-cart","id":"add-to-cart","testId":"add-to-cart"},{"role":"link","name":"X","tag":"a","testId":"social-x"},{"role":"link","name":"Facebook","tag":"a","testId":"social-facebook"},{"role":"link","name":"LinkedIn","tag":"a","testId":"social-linkedin"}]
+```

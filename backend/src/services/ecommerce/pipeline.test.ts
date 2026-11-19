@@ -60,7 +60,7 @@ test("legacy planner still receives the full snapshot", async () => {
 
 test("ecommerce planner sends the compact inventory instead of the raw snapshot", async () => {
   const selection = selectSnapshotPlanner("ecommerce");
-  assert.deepEqual(selection.stages, ["compact_snapshot"]);
+  assert.deepEqual(selection.stages, ["compact_snapshot", "classify_elements"]);
   const requests: ChatRequest[] = [];
   const result = await selection.planner(
     payload,
@@ -73,6 +73,9 @@ test("ecommerce planner sends the compact inventory instead of the raw snapshot"
   assert.match(prompt, /PAGE \/cart/);
   assert.match(prompt, /G1 item "AirPods Pro 2 USB-C"/);
   assert.match(prompt, /ยอดรวม: ฿7,990/);
+  assert.match(prompt, /button remove_from_cart "ลบสินค้า"/, "element purposes label the compact text");
+  assert.match(prompt, /text subtotal "ยอดรวม: ฿7,990"/);
+  assert.doesNotMatch(prompt, /generic_/);
   assert.doesNotMatch(prompt, /\[ref=|```yaml/);
 });
 

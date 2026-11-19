@@ -40,3 +40,7 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
           - option "ทุกหมวดหมู่" [selected]
       - paragraph [ref=f4e164]: ไม่พบสินค้าที่ตรงกับเงื่อนไข
 ```
+### Element Attributes
+```json
+[{"role":"link","name":"หน้าแรก","tag":"a"},{"role":"link","name":"สินค้าทั้งหมด","tag":"a"},{"role":"link","name":"บัญชีของฉัน","tag":"a"},{"role":"link","name":"รายการโปรด","tag":"a"},{"role":"link","name":"ตะกร้าสินค้า","tag":"a"},{"role":"link","name":"คำสั่งซื้อ","tag":"a"},{"role":"link","name":"เข้าสู่ระบบ","tag":"a"},{"role":"link","name":"สมัครสมาชิก","tag":"a"},{"role":"textbox","name":"ค้นหาสินค้าด้วยชื่อ...","tag":"input","type":"text","placeholder":"ค้นหาสินค้าด้วยชื่อ..."},{"role":"combobox","name":"","tag":"select"}]
+```

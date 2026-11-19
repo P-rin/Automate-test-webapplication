@@ -7,5 +7,12 @@
       "ไม่พบสินค้าที่ตรงกับเงื่อนไข",
       "zzqxnotfound"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "textbox",
+      "purpose": "search",
+      "name": "ค้นหาสินค้าด้วยชื่อ..."
+    }
+  ]
 }

@@ -15,5 +15,34 @@
       "สินค้าหมด",
       "฿7,990"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "link",
+      "purpose": "cart_badge",
+      "name": "ตะกร้าสินค้า"
+    },
+    {
+      "role": "link",
+      "purpose": "generic_button",
+      "name": "คำสั่งซื้อ"
+    },
+    {
+      "role": "button",
+      "purpose": "generic_button",
+      "name": "เพิ่มหรือลบรายการโปรด",
+      "groupId": "G1"
+    },
+    {
+      "role": "button",
+      "purpose": "add_to_cart",
+      "name": "เพิ่มลงตะกร้า",
+      "groupId": "G1"
+    },
+    {
+      "role": "link",
+      "purpose": "generic_button",
+      "name": "Dell XPS 13 Plus -8%"
+    }
+  ]
 }

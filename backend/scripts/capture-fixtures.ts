@@ -16,8 +16,11 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  appendElementAttributeSection,
+  COLLECT_ELEMENT_ATTRS_FUNCTION,
   COLLECT_TEST_IDS_FUNCTION,
   formatTestIdSection,
+  type ElementAttributeEntry,
   insertTestIdSection,
   parseBrowserEvaluateResult,
   resolvePlaywrightMcpLaunchConfig,
@@ -40,7 +43,10 @@ const call = async (name: string, args: Record<string, unknown>): Promise<string
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Same shape as snapshotService.collectSnapshot: tool output with the "### Test IDs" section inserted. */
+/**
+ * Same shape as snapshotService.collectSnapshot in GENERATION_MODE=ecommerce: tool output with the
+ * "### Test IDs" section inserted and the "### Element Attributes" section appended.
+ */
 const snapshot = async (waitMs = 1500): Promise<string> => {
   await pause(waitMs);
   const text = await call("browser_snapshot", {});
@@ -53,8 +59,17 @@ const snapshot = async (waitMs = 1500): Promise<string> => {
   } catch {
     // Same fallback as the pipeline: continue without test IDs.
   }
+  let attributes: ElementAttributeEntry[] = [];
+  try {
+    const entries = parseBrowserEvaluateResult(
+      await client.callTool({ name: "browser_evaluate", arguments: { function: COLLECT_ELEMENT_ATTRS_FUNCTION } }),
+    );
+    attributes = Array.isArray(entries) ? entries as ElementAttributeEntry[] : [];
+  } catch {
+    // Same fallback as the pipeline: continue without element attributes.
+  }
   // "### Open tabs" lists unrelated tabs (e.g. a footer link that opened one); the pipeline never relies on it.
-  return insertTestIdSection(text.replace(/### Open tabs\n(?:- .*\n)*/, ""), section);
+  return appendElementAttributeSection(insertTestIdSection(text.replace(/### Open tabs\n(?:- .*\n)*/, ""), section), attributes);
 };
 
 const navigate = async (url: string): Promise<string> => {

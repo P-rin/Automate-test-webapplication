@@ -6,6 +6,7 @@
  * Pure functions only (no browser, Firestore or Ollama).
  */
 import { DYNAMIC_HEADER_TERMS, IMPORTANT_TEXT_TERMS, MONEY_PATTERN, matchesAnyTerm } from "./keywords.js";
+import type { ElementAttributeEntry } from "../snapshotService.js";
 import type { ElementInventory, InventoryElement, InventoryGroup, PageType, Region, StructuredStep } from "./types.js";
 
 export interface ParsedNode {
@@ -38,7 +39,97 @@ export interface ParsedSnapshot {
   pageTitle: string;
   nodes: ParsedNode[];
   testIds: TestIdEntryLine[];
+  /** "### Element Attributes" (Phase 3a, ecommerce mode only), in DOM order. */
+  elementAttributes: ElementAttributeEntry[];
 }
+
+/** Reads the JSON block after "### Element Attributes"; malformed or missing sections give []. */
+export const parseElementAttributes = (snapshot: string): ElementAttributeEntry[] => {
+  const match = snapshot.match(/### Element Attributes\s*```json\s*([\s\S]*?)```/);
+  if (!match) return [];
+  try {
+    const value = JSON.parse(match[1]) as unknown;
+    return Array.isArray(value)
+      ? value.filter((entry): entry is ElementAttributeEntry =>
+        typeof entry === "object" && entry !== null && typeof (entry as ElementAttributeEntry).role === "string"
+        && typeof (entry as ElementAttributeEntry).name === "string")
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+const attributeKey = (role: string, name: string): string =>
+  `${role}|${name.replace(/\s+/g, " ").trim().toLocaleLowerCase()}`;
+
+/**
+ * Pairs snapshot nodes with DOM attribute entries: the k-th node with a given role + name is the k-th entry
+ * with that role + name (both lists are in document order). Nodes whose name the DOM-side approximation does
+ * not reproduce stay unmatched rather than being paired with the wrong element.
+ */
+export const matchElementAttributes = (nodes: ParsedNode[], entries: ElementAttributeEntry[]): Map<number, ElementAttributeEntry> => {
+  const result = new Map<number, ElementAttributeEntry>();
+  const usedEntries = new Set<ElementAttributeEntry>();
+  const interactive = nodes.filter((node) => INTERACTIVE_ROLES.has(node.role));
+
+  /** One pass: k-th unmatched node with a key <-> k-th unused entry with the same key. */
+  const pass = (keyOf: (role: string, name: string) => string) => {
+    const entriesByKey = new Map<string, ElementAttributeEntry[]>();
+    for (const entry of entries) {
+      if (usedEntries.has(entry)) continue;
+      const key = keyOf(entry.role, entry.name);
+      entriesByKey.set(key, [...(entriesByKey.get(key) ?? []), entry]);
+    }
+    const seen = new Map<string, number>();
+    for (const node of interactive) {
+      if (result.has(node.index)) continue;
+      const key = keyOf(node.role, node.name || node.placeholder || "");
+      const occurrence = seen.get(key) ?? 0;
+      seen.set(key, occurrence + 1);
+      const entry = entriesByKey.get(key)?.[occurrence];
+      if (entry) {
+        result.set(node.index, entry);
+        usedEntries.add(entry);
+      }
+    }
+  };
+  pass(attributeKey);
+  // Same name up to whitespace ("USB-C -11%" vs "USB-C-11%" from the DOM text approximation).
+  pass((role, name) => `${role}|${name.replace(/\s+/g, "").toLocaleLowerCase()}`);
+
+  // Last resort per role: when exactly as many nodes as entries are left (e.g. image buttons the snapshot
+  // shows without a name), pair them in document order.
+  const roles = new Set(interactive.filter((node) => !result.has(node.index)).map((node) => node.role));
+  for (const role of roles) {
+    const leftNodes = interactive.filter((node) => node.role === role && !result.has(node.index));
+    const leftEntries = entries.filter((entry) => entry.role === role && !usedEntries.has(entry));
+    if (leftNodes.length === leftEntries.length) {
+      leftNodes.forEach((node, position) => {
+        result.set(node.index, leftEntries[position]);
+        usedEntries.add(leftEntries[position]);
+      });
+    }
+  }
+  return result;
+};
+
+const attrsFromEntry = (entry: ElementAttributeEntry): NonNullable<InventoryElement["attrs"]> => ({
+  tag: entry.tag,
+  ...(entry.type ? { type: entry.type } : {}),
+  ...(entry.placeholder ? { placeholder: entry.placeholder } : {}),
+  ...(entry.required ? { required: true } : {}),
+  ...(entry.min !== undefined ? { min: entry.min } : {}),
+  ...(entry.max !== undefined ? { max: entry.max } : {}),
+  ...(entry.maxLength !== undefined ? { maxLength: entry.maxLength } : {}),
+  ...(entry.pattern ? { pattern: entry.pattern } : {}),
+  ...(entry.disabled ? { disabled: true } : {}),
+  ...(entry.testId ? { testId: entry.testId } : {}),
+  ...(entry.formRole ? { formRole: entry.formRole } : {}),
+  ...(entry.htmlName ? { htmlName: entry.htmlName } : {}),
+  ...(entry.autocomplete ? { autocomplete: entry.autocomplete } : {}),
+  ...(entry.inputMode ? { inputMode: entry.inputMode } : {}),
+  ...(entry.formButtons?.length ? { formButtons: entry.formButtons } : {}),
+});
 
 export const INTERACTIVE_ROLES = new Set([
   "button", "link", "textbox", "searchbox", "spinbutton", "combobox", "listbox", "checkbox", "radio",
@@ -161,7 +252,7 @@ export const parseSnapshot = (snapshot: string): ParsedSnapshot => {
     stack.push(node.index);
   });
 
-  return { pageUrl, pageTitle, nodes, testIds: parseTestIdLines(lines) };
+  return { pageUrl, pageTitle, nodes, testIds: parseTestIdLines(lines), elementAttributes: parseElementAttributes(snapshot) };
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -373,6 +464,7 @@ export const buildInventory = (snapshot: string, options: BuildInventoryOptions 
   const { nodes } = parsed;
   const maxGroupItems = Math.max(1, options.maxGroupItems ?? DEFAULT_MAX_GROUP_ITEMS);
   const previouslySent = options.previouslySentNavigation ?? new Set<string>();
+  const attributeMatches = matchElementAttributes(nodes, parsed.elementAttributes);
 
   const sets = findRepeatedSets(parsed);
   const groups: InventoryGroup[] = [];
@@ -454,7 +546,9 @@ export const buildInventory = (snapshot: string, options: BuildInventoryOptions 
       const selected = options.find((option) => option.attrs.selected)?.name;
       const ownValue = ["textbox", "searchbox", "spinbutton", "slider"].includes(node.role) ? node.text : undefined;
       const shortened = childText.length > 0 && !ownValue ? shorten(childText.join(" ")) : undefined;
+      const domEntry = attributeMatches.get(index);
       const attrs: InventoryElement["attrs"] = {
+        ...(domEntry ? attrsFromEntry(domEntry) : {}),
         ...(node.placeholder ? { placeholder: node.placeholder } : {}),
         ...(node.attrs.disabled ? { disabled: true } : {}),
         ...(node.attrs.checked ? { checked: true } : {}),
@@ -557,7 +651,8 @@ const pathOf = (url: string): string => {
 
 export const renderElement = (element: InventoryElement): string => {
   const parts = [element.id, element.role];
-  if (element.purpose) parts.push(element.purpose);
+  // Generic purposes say nothing the role does not already say; they would only cost prompt space.
+  if (element.purpose && !element.purpose.startsWith("generic_") && element.purpose !== "unknown") parts.push(element.purpose);
   if (element.role === "text" || element.role === "status" || element.role === "alert") {
     parts.push(quote(element.name ? `${element.name}: ${element.text ?? ""}` : element.text ?? ""));
   } else {
@@ -567,7 +662,13 @@ export const renderElement = (element: InventoryElement): string => {
   if (element.attrs?.disabled) parts.push("[disabled]");
   if (element.attrs?.checked) parts.push("[checked]");
   if (element.value !== undefined) parts.push(`value=${quote(element.value)}`);
-  if (element.attrs?.placeholder) parts.push(`placeholder=${quote(element.attrs.placeholder)}`);
+  if (element.attrs?.placeholder && element.attrs.placeholder !== element.name) parts.push(`placeholder=${quote(element.attrs.placeholder)}`);
+  if (element.attrs?.type && !["text", "button", "submit"].includes(element.attrs.type)) parts.push(`type=${element.attrs.type}`);
+  if (element.attrs?.tag === "textarea") parts.push("multiline");
+  if (element.attrs?.min !== undefined) parts.push(`min=${element.attrs.min}`);
+  if (element.attrs?.max !== undefined) parts.push(`max=${element.attrs.max}`);
+  if (element.attrs?.maxLength !== undefined) parts.push(`maxLength=${element.attrs.maxLength}`);
+  if (element.attrs?.required) parts.push("[required]");
   if (element.options) parts.push(`options=[${element.options.join(" | ")}]`);
   if (element.interactive && element.text) parts.push(`text=${quote(element.text)}`);
   if (element.href && !/^https?:/i.test(element.href)) parts.push(`-> ${element.href}`);

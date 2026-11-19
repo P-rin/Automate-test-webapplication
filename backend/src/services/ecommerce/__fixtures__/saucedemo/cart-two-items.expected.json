@@ -16,5 +16,23 @@
       "Remove",
       "Checkout"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "button",
+      "purpose": "remove_from_cart",
+      "name": "Remove",
+      "groupId": "G1"
+    },
+    {
+      "role": "button",
+      "purpose": "checkout_button",
+      "name": "Checkout"
+    },
+    {
+      "role": "button",
+      "purpose": "cart_badge",
+      "name": "Cart, 2 items"
+    }
+  ]
 }

@@ -60,3 +60,7 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
           - /url: https://www.linkedin.com/company/sauce-labs/
     - generic [ref=f10e100]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
 ```
+### Element Attributes
+```json
+[{"role":"button","name":"Open Menu","tag":"button","type":"button","id":"react-burger-menu-btn"},{"role":"button","name":"Cart, 2 items","tag":"a","testId":"shopping-cart-link"},{"role":"textbox","name":"First Name","tag":"input","type":"text","placeholder":"First Name","htmlName":"firstName","id":"first-name","testId":"firstName","formButtons":["Cancel","Continue"]},{"role":"textbox","name":"Last Name","tag":"input","type":"text","placeholder":"Last Name","htmlName":"lastName","id":"last-name","testId":"lastName","formButtons":["Cancel","Continue"]},{"role":"textbox","name":"Zip/Postal Code","tag":"input","type":"text","placeholder":"Zip/Postal Code","htmlName":"postalCode","id":"postal-code","testId":"postalCode","formButtons":["Cancel","Continue"]},{"role":"button","name":"Cancel","tag":"button","htmlName":"cancel","id":"cancel","testId":"cancel"},{"role":"button","name":"Continue","tag":"input","type":"submit","htmlName":"continue","id":"continue","testId":"continue","formButtons":["Cancel"]},{"role":"link","name":"X","tag":"a","testId":"social-x"},{"role":"link","name":"Facebook","tag":"a","testId":"social-facebook"},{"role":"link","name":"LinkedIn","tag":"a","testId":"social-linkedin"}]
+```

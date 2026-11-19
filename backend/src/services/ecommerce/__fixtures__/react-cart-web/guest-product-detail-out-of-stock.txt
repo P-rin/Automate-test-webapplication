@@ -47,19 +47,23 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
             - paragraph [ref=f3e34]: รายละเอียดสินค้า
             - generic [ref=f3e35]:
               - paragraph [ref=f3e36]:
-                - generic [ref=f3e37]: "การรับประกัน:"
-                - text: 3 years
-              - paragraph [ref=f3e38]:
-                - generic [ref=f3e39]: "รองรับน้ำหนักสูงสุด:"
-                - text: 120kg
-              - paragraph [ref=f3e40]:
-                - generic [ref=f3e41]: "สี:"
-                - text: Charcoal
-              - paragraph [ref=f3e42]:
-                - generic [ref=f3e43]: "วัสดุ:"
+                - generic [ref=f3e37]: "วัสดุ:"
                 - text: Mesh + Aluminum
+              - paragraph [ref=f3e38]:
+                - generic [ref=f3e39]: "การรับประกัน:"
+                - text: 3 years
+              - paragraph [ref=f3e40]:
+                - generic [ref=f3e41]: "รองรับน้ำหนักสูงสุด:"
+                - text: 120kg
+              - paragraph [ref=f3e42]:
+                - generic [ref=f3e43]: "สี:"
+                - text: Charcoal
           - paragraph [ref=f3e44]: ฿6,590
           - paragraph [ref=f3e45]: สินค้าหมด
           - spinbutton [disabled] [ref=f3e47]: "1"
           - button "สินค้าหมด" [disabled] [ref=f3e48]
+```
+### Element Attributes
+```json
+[{"role":"link","name":"หน้าแรก","tag":"a"},{"role":"link","name":"สินค้าทั้งหมด","tag":"a"},{"role":"link","name":"บัญชีของฉัน","tag":"a"},{"role":"link","name":"รายการโปรด","tag":"a"},{"role":"link","name":"ตะกร้าสินค้า","tag":"a"},{"role":"link","name":"คำสั่งซื้อ","tag":"a"},{"role":"link","name":"เข้าสู่ระบบ","tag":"a"},{"role":"link","name":"สมัครสมาชิก","tag":"a"},{"role":"link","name":"← กลับไปหน้าสินค้า","tag":"a"},{"role":"button","name":"รูปสินค้า 1","tag":"button","type":"button"},{"role":"button","name":"รูปสินค้า 2","tag":"button","type":"button"},{"role":"spinbutton","name":"","tag":"input","type":"number","disabled":true,"min":"1","max":"1"},{"role":"button","name":"สินค้าหมด","tag":"button","type":"button","disabled":true}]
 ```

@@ -12,5 +12,62 @@
       "ภาษี (7%): ฿559.3",
       "ยอดสุทธิ: ฿8,549.3"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "textbox",
+      "purpose": "name",
+      "name": "ชื่อผู้รับ"
+    },
+    {
+      "role": "textbox",
+      "purpose": "phone",
+      "name": "เบอร์โทร"
+    },
+    {
+      "role": "textbox",
+      "purpose": "address",
+      "name": "ที่อยู่"
+    },
+    {
+      "role": "textbox",
+      "purpose": "address",
+      "name": "จังหวัด"
+    },
+    {
+      "role": "textbox",
+      "purpose": "postal_code",
+      "name": "รหัสไปรษณีย์"
+    },
+    {
+      "role": "textbox",
+      "purpose": "generic_text",
+      "name": "หมายเหตุเพิ่มเติม"
+    },
+    {
+      "role": "button",
+      "purpose": "checkout_button",
+      "name": "ยืนยันและชำระเงิน"
+    },
+    {
+      "role": "text",
+      "purpose": "subtotal",
+      "name": "ยอดรวมสินค้า"
+    },
+    {
+      "role": "text",
+      "purpose": "total",
+      "name": "ยอดสุทธิ"
+    },
+    {
+      "role": "text",
+      "purpose": "generic_text",
+      "name": "ภาษี (7%)"
+    },
+    {
+      "role": "heading",
+      "purpose": "generic_text",
+      "name": "ยืนยันคำสั่งซื้อ"
+    }
+  ]
 }

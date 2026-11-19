@@ -47,19 +47,23 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
             - paragraph [ref=f2e34]: รายละเอียดสินค้า
             - generic [ref=f2e35]:
               - paragraph [ref=f2e36]:
-                - generic [ref=f2e37]: "แบรนด์:"
-                - text: Apple
-              - paragraph [ref=f2e38]:
-                - generic [ref=f2e39]: "การเชื่อมต่อ:"
-                - text: Bluetooth 5.3
-              - paragraph [ref=f2e40]:
-                - generic [ref=f2e41]: "ระบบตัดเสียงรบกวน:"
-                - text: Active Noise Cancellation
-              - paragraph [ref=f2e42]:
-                - generic [ref=f2e43]: "แบตเตอรี่:"
+                - generic [ref=f2e37]: "แบตเตอรี่:"
                 - text: Up to 30 hours with case
+              - paragraph [ref=f2e38]:
+                - generic [ref=f2e39]: "ระบบตัดเสียงรบกวน:"
+                - text: Active Noise Cancellation
+              - paragraph [ref=f2e40]:
+                - generic [ref=f2e41]: "แบรนด์:"
+                - text: Apple
+              - paragraph [ref=f2e42]:
+                - generic [ref=f2e43]: "การเชื่อมต่อ:"
+                - text: Bluetooth 5.3
           - paragraph [ref=f2e44]: ฿7,990
           - paragraph [ref=f2e45]: คงเหลือ 43 ชิ้น
           - spinbutton [ref=f2e47]: "1"
           - button "เข้าสู่ระบบเพื่อซื้อ" [ref=f2e48]
+```
+### Element Attributes
+```json
+[{"role":"link","name":"หน้าแรก","tag":"a"},{"role":"link","name":"สินค้าทั้งหมด","tag":"a"},{"role":"link","name":"บัญชีของฉัน","tag":"a"},{"role":"link","name":"รายการโปรด","tag":"a"},{"role":"link","name":"ตะกร้าสินค้า","tag":"a"},{"role":"link","name":"คำสั่งซื้อ","tag":"a"},{"role":"link","name":"เข้าสู่ระบบ","tag":"a"},{"role":"link","name":"สมัครสมาชิก","tag":"a"},{"role":"link","name":"← กลับไปหน้าสินค้า","tag":"a"},{"role":"button","name":"รูปสินค้า 1","tag":"button","type":"button"},{"role":"button","name":"รูปสินค้า 2","tag":"button","type":"button"},{"role":"spinbutton","name":"","tag":"input","type":"number","min":"1","max":"43"},{"role":"button","name":"เข้าสู่ระบบเพื่อซื้อ","tag":"button","type":"button"}]
 ```

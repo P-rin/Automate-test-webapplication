@@ -18,5 +18,47 @@
       "สินค้าหมด",
       "(อีก 6 ชิ้นรูปแบบเดียวกับ G1)"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "textbox",
+      "purpose": "search",
+      "name": "ค้นหาสินค้าด้วยชื่อ..."
+    },
+    {
+      "role": "combobox",
+      "purpose": "filter",
+      "name": ""
+    },
+    {
+      "role": "text",
+      "purpose": "product_name",
+      "text": "AirPods Pro 2 USB-C",
+      "groupId": "G1"
+    },
+    {
+      "role": "text",
+      "purpose": "price",
+      "text": "฿7,990",
+      "groupId": "G1"
+    },
+    {
+      "role": "text",
+      "purpose": "stock_status",
+      "text": "คงเหลือ 43",
+      "groupId": "G1"
+    },
+    {
+      "role": "button",
+      "purpose": "add_to_cart",
+      "name": "เข้าสู่ระบบเพื่อซื้อ",
+      "groupId": "G1"
+    },
+    {
+      "role": "button",
+      "purpose": "add_to_cart",
+      "name": "สินค้าหมด",
+      "groupId": "G3"
+    }
+  ]
 }

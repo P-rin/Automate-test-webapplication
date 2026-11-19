@@ -5,11 +5,14 @@
  *   Phase 1 — compact_snapshot: each snapshot is compacted into an ElementInventory and the planner sees the
  *             compact text instead of the tail-truncated full snapshot. Nav/footer seen on an earlier page of
  *             the job is hidden on later pages.
+ *   Phase 3 — classify_elements: rule-based element purposes (search, quantity, add_to_cart, ...) are shown in
+ *             the compact text; DOM attributes come from snapshotService in ecommerce mode.
  * Planning itself still uses the legacy one-case-at-a-time planner until candidate selection (Phases 2–4).
  * The full snapshot is still what gets stored and what script generation uses.
  */
 import type { GenerationMode } from "../../config/env.js";
 import { processSnapshotTestPlans } from "../ollamaService.js";
+import { classifyInventory } from "./elementClassifier.js";
 import {
   buildInventory,
   compactSnapshotBudget,
@@ -22,7 +25,7 @@ import {
 /** Plans the cases of one snapshot; identical signature for both modes so the job loop stays mode-agnostic. */
 export type SnapshotPlanner = typeof processSnapshotTestPlans;
 
-export type EcommerceStage = "compact_snapshot";
+export type EcommerceStage = "compact_snapshot" | "classify_elements";
 
 export interface SnapshotPlannerSelection {
   mode: GenerationMode;
@@ -41,10 +44,13 @@ export const createEcommerceSnapshotPlanner = (): SnapshotPlanner => {
   const sentNavigation = new Set<string>();
 
   return async (payload, snapshot, options, persistCase, acceptanceCriteria, coveredAcIds, allowMutatingTests, coverage, hooks) => {
-    const inventory = buildInventory(snapshot, { previouslySentNavigation: sentNavigation });
-    if (inventory.elements.length === 0) {
+    const built = buildInventory(snapshot, { previouslySentNavigation: sentNavigation });
+    if (built.elements.length === 0) {
       return processSnapshotTestPlans(payload, snapshot, options, persistCase, acceptanceCriteria, coveredAcIds, allowMutatingTests, coverage, hooks);
     }
+    // Rules only here: the purposes label the prompt; the LLM fallback for ambiguous elements runs where
+    // purposes drive templates (Phase 4), so planning does not pay for questions nobody consumes yet.
+    const { inventory } = classifyInventory(built);
     const compact = renderInventoryForPrompt(inventory, compactSnapshotBudget(options.maxPromptChars ?? DEFAULT_MAX_PROMPT_CHARS));
     for (const key of navigationKeysOf(inventory)) sentNavigation.add(key);
 
@@ -82,5 +88,5 @@ export const createEcommerceSnapshotPlanner = (): SnapshotPlanner => {
 /** Call once per job: the ecommerce planner keeps per-job state. */
 export const selectSnapshotPlanner = (mode: GenerationMode): SnapshotPlannerSelection =>
   mode === "ecommerce"
-    ? { mode, planner: createEcommerceSnapshotPlanner(), stages: ["compact_snapshot"] }
+    ? { mode, planner: createEcommerceSnapshotPlanner(), stages: ["compact_snapshot", "classify_elements"] }
     : { mode: "legacy", planner: processSnapshotTestPlans, stages: [] };

@@ -67,3 +67,7 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
           - paragraph [ref=e54]: ที่ตั้ง
           - paragraph [ref=e55]: 44/2 ถ.นิมมานเหมินท์ ตำบลสุเทพ อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50200
 ```
+### Element Attributes
+```json
+[{"role":"link","name":"หน้าแรก","tag":"a"},{"role":"link","name":"สินค้าทั้งหมด","tag":"a"},{"role":"link","name":"บัญชีของฉัน","tag":"a"},{"role":"link","name":"รายการโปรด","tag":"a"},{"role":"link","name":"ตะกร้าสินค้า","tag":"a"},{"role":"link","name":"คำสั่งซื้อ","tag":"a"},{"role":"link","name":"เข้าสู่ระบบ","tag":"a"},{"role":"link","name":"สมัครสมาชิก","tag":"a"},{"role":"link","name":"หน้าแรก Nimman Corner","tag":"a"},{"role":"link","name":"ดูสินค้าทั้งหมด","tag":"a"},{"role":"link","name":"เข้าสู่ระบบ","tag":"a"},{"role":"link","name":"เลือกซื้อสินค้า","tag":"a"},{"role":"link","name":"081-234-5678","tag":"a"}]
+```

@@ -15,5 +15,22 @@
       "Total: $43.18",
       "Finish"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "text",
+      "purpose": "subtotal",
+      "text": "Item total: $39.98"
+    },
+    {
+      "role": "text",
+      "purpose": "total",
+      "text": "Total: $43.18"
+    },
+    {
+      "role": "text",
+      "purpose": "generic_text",
+      "text": "Tax: $3.20"
+    }
+  ]
 }

@@ -8,5 +8,17 @@
       "textbox \"รหัสผ่าน\"",
       "button \"เข้าสู่ระบบ\""
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "textbox",
+      "purpose": "email",
+      "name": "อีเมล"
+    },
+    {
+      "role": "textbox",
+      "purpose": "password",
+      "name": "รหัสผ่าน"
+    }
+  ]
 }

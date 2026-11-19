@@ -9,5 +9,22 @@
       "Zip/Postal Code",
       "Continue"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "textbox",
+      "purpose": "name",
+      "name": "First Name"
+    },
+    {
+      "role": "textbox",
+      "purpose": "name",
+      "name": "Last Name"
+    },
+    {
+      "role": "textbox",
+      "purpose": "postal_code",
+      "name": "Zip/Postal Code"
+    }
+  ]
 }

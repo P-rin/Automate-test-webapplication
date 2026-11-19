@@ -31,3 +31,7 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
       - link "กลับไปตะกร้า" [ref=f12e23] [cursor=pointer]:
         - /url: /cart
 ```
+### Element Attributes
+```json
+[{"role":"link","name":"หน้าแรก","tag":"a"},{"role":"link","name":"สินค้าทั้งหมด","tag":"a"},{"role":"link","name":"บัญชีของฉัน","tag":"a"},{"role":"link","name":"รายการโปรด","tag":"a"},{"role":"link","name":"ตะกร้าสินค้า","tag":"a"},{"role":"link","name":"คำสั่งซื้อ","tag":"a"},{"role":"link","name":"กลับไปตะกร้า","tag":"a"}]
+```

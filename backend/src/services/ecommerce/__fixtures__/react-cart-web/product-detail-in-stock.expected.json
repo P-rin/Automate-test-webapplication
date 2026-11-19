@@ -10,5 +10,37 @@
       "spinbutton",
       "เพิ่มลงตะกร้า"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "heading",
+      "purpose": "product_name",
+      "name": "AirPods Pro 2 USB-C"
+    },
+    {
+      "role": "spinbutton",
+      "purpose": "quantity",
+      "name": ""
+    },
+    {
+      "role": "button",
+      "purpose": "add_to_cart",
+      "name": "เพิ่มลงตะกร้า"
+    },
+    {
+      "role": "button",
+      "purpose": "generic_button",
+      "name": "♡ เพิ่มรายการโปรด"
+    },
+    {
+      "role": "text",
+      "purpose": "generic_text",
+      "text": "หูฟังไร้สายพร้อม ANC และโหมด Transparency"
+    },
+    {
+      "role": "text",
+      "purpose": "price",
+      "text": "฿7,990"
+    }
+  ]
 }

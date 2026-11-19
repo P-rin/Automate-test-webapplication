@@ -70,4 +70,8 @@ DOM attributes (not in the tree below). Use only as written: page.locator('[data
         - /url: /products#storefront
 ```
 ### Events
-- New console entries: .playwright-mcp\console-2026-11-19T05-14-25-376Z.log#L2
+- New console entries: .playwright-mcp\console-2026-11-19T06-21-45-123Z.log#L2
+### Element Attributes
+```json
+[{"role":"link","name":"หน้าแรก","tag":"a"},{"role":"link","name":"สินค้าทั้งหมด","tag":"a"},{"role":"link","name":"บัญชีของฉัน","tag":"a"},{"role":"link","name":"รายการโปรด","tag":"a"},{"role":"link","name":"ตะกร้าสินค้า","tag":"a"},{"role":"link","name":"คำสั่งซื้อ","tag":"a"},{"role":"link","name":"เข้าสู่ระบบ","tag":"a"},{"role":"link","name":"สมัครสมาชิก","tag":"a"},{"role":"textbox","name":"ชื่อผู้ใช้*","tag":"input","placeholder":"กำหนดชื่อผู้ใช้","formButtons":["สมัครสมาชิก"]},{"role":"textbox","name":"ชื่อ*","tag":"input","placeholder":"ชื่อ","formButtons":["สมัครสมาชิก"]},{"role":"textbox","name":"นามสกุล*","tag":"input","placeholder":"นามสกุล","formButtons":["สมัครสมาชิก"]},{"role":"textbox","name":"อีเมล*","tag":"input","type":"email","placeholder":"กรอกอีเมลของคุณ","autocomplete":"email","formButtons":["สมัครสมาชิก"]},{"role":"textbox","name":"เบอร์โทรศัพท์","tag":"input","placeholder":"089xxxxxxx","formButtons":["สมัครสมาชิก"]},{"role":"textbox","name":"รหัสผ่าน*","tag":"input","type":"password","placeholder":"อย่างน้อย 6 ตัวอักษร","autocomplete":"new-password","formButtons":["สมัครสมาชิก"]},{"role":"textbox","name":"ยืนยันรหัสผ่าน*","tag":"input","type":"password","placeholder":"กรอกรหัสผ่านอีกครั้ง","autocomplete":"new-password","formButtons":["สมัครสมาชิก"]},{"role":"button","name":"สมัครสมาชิก","tag":"button","type":"submit"},{"role":"link","name":"เข้าสู่ระบบ","tag":"a"},{"role":"link","name":"กลับไปเลือกชมสินค้า","tag":"a"}]
+```

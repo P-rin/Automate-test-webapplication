@@ -37,6 +37,8 @@ export interface InventoryElement {
     disabled?: boolean; testId?: string; formRole?: string;
     /** (added) snapshot state flags */
     checked?: boolean; selected?: boolean; level?: number;
+    /** (added) from "### Element Attributes": HTML name/autocomplete/inputmode and other buttons of the same form */
+    htmlName?: string; autocomplete?: string; inputMode?: string; formButtons?: string[];
   };
   /** Combobox/listbox options. */
   options?: string[];

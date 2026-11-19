@@ -8,5 +8,12 @@
       "Password",
       "Login"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "textbox",
+      "purpose": "password",
+      "name": "Password"
+    }
+  ]
 }

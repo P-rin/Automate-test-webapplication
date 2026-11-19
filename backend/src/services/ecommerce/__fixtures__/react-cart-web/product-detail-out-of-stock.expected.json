@@ -7,5 +7,12 @@
       "สินค้าหมด",
       "[disabled]"
     ]
-  }
+  },
+  "purposes": [
+    {
+      "role": "spinbutton",
+      "purpose": "quantity",
+      "name": ""
+    }
+  ]
 }
