@@ -39,6 +39,14 @@ export interface PlanningMetrics {
   referencesCutByCompaction: number;
   /** ecommerce mode: labels a plan used that are on neither (model invention). */
   referencesNotOnPage: number;
+  /** ecommerce mode (Phase 4): candidates built by templates / kept after selection. */
+  candidatesGenerated: number;
+  candidatesKept: number;
+  /** Mandatory candidates the model wanted to drop; candidates decided by the fallback after a failed call. */
+  candidatesForcedByMandatory: number;
+  candidatesByFallback: number;
+  exploratoryAccepted: number;
+  exploratoryRejected: number;
   byCategory: Record<string, number>;
   byPage: Record<string, number>;
   byPageType: Record<string, number>;
@@ -64,6 +72,16 @@ export interface GenerationMetricsHooks {
   onLlmCall?: (call: LlmCallMetric) => void;
   onScriptAttempt?: (attempt: ScriptAttemptMetric) => void;
   onPromptReferenceMiss?: (miss: { text: string; inFullSnapshot: boolean }) => void;
+  onCandidateStage?: (stage: CandidateStageMetric) => void;
+}
+
+export interface CandidateStageMetric {
+  generated: number;
+  kept: number;
+  forcedByMandatory: number;
+  byFallback: number;
+  exploratoryAccepted: number;
+  exploratoryRejected: number;
 }
 
 const MAX_RECORDED_CALLS = 2000;
@@ -82,6 +100,12 @@ export class GenerationMetricsCollector {
     stalledSnapshotCount: 0,
     referencesCutByCompaction: 0,
     referencesNotOnPage: 0,
+    candidatesGenerated: 0,
+    candidatesKept: 0,
+    candidatesForcedByMandatory: 0,
+    candidatesByFallback: 0,
+    exploratoryAccepted: 0,
+    exploratoryRejected: 0,
     byCategory: {},
     byPage: {},
     byPageType: {},
@@ -106,6 +130,7 @@ export class GenerationMetricsCollector {
     onLlmCall: (call) => this.recordLlmCall(call),
     onScriptAttempt: (attempt) => this.recordScriptAttempt(attempt),
     onPromptReferenceMiss: (miss) => this.recordPromptReferenceMiss(miss.inFullSnapshot),
+    onCandidateStage: (stage) => this.recordCandidateStage(stage),
   };
 
   recordPlanned(input: { category?: string; page: string; pageType?: string }): void {
@@ -123,6 +148,15 @@ export class GenerationMetricsCollector {
   recordPromptReferenceMiss(inFullSnapshot: boolean): void {
     if (inFullSnapshot) this.planning.referencesCutByCompaction += 1;
     else this.planning.referencesNotOnPage += 1;
+  }
+
+  recordCandidateStage(stage: CandidateStageMetric): void {
+    this.planning.candidatesGenerated += stage.generated;
+    this.planning.candidatesKept += stage.kept;
+    this.planning.candidatesForcedByMandatory += stage.forcedByMandatory;
+    this.planning.candidatesByFallback += stage.byFallback;
+    this.planning.exploratoryAccepted += stage.exploratoryAccepted;
+    this.planning.exploratoryRejected += stage.exploratoryRejected;
   }
 
   recordStalledSnapshot(): void {

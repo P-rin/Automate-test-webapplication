@@ -109,6 +109,8 @@ export interface CandidateCase {
   oracle: Oracle;
   /** e.g. "seed_cart_one_item" (Phase 7). */
   preconditionId?: string;
+  /** (added) start without the runner's pre-login session (e.g. "a protected page needs login"). */
+  loggedOut?: boolean;
   expectedResultTh: string;
 }
 
@@ -146,7 +148,16 @@ export type Oracle =
   | { kind: "countEquals"; groupId: string; expected: number }
   | { kind: "countChangedBy"; elementId: string; delta: number }
   | { kind: "inputValueEquals"; elementId: string; expected: string }
-  | { kind: "validationMessageShown"; elementId: string }
+  /** Native validity or an error near the field; with submitElementId also "submit stays disabled" (sites that disable the button instead of showing a message). */
+  | { kind: "validationMessageShown"; elementId: string; submitElementId?: string }
+  /** (added) a <select> shows the option with this label. */
+  | { kind: "selectedOptionIs"; elementId: string; label: string }
+  /** (added) the element's text is the same after the steps as before them (e.g. total after an invalid coupon). */
+  | { kind: "textUnchanged"; elementId: string }
+  /** (added) total = sum(add) - sum(subtract) of the amounts shown (subtotal + tax + shipping - discount). */
+  | { kind: "totalEqualsSum"; totalElementId: string; addElementIds: string[]; subtractElementIds: string[] }
+  /** (added) amount = base x percent / 100, for a fee whose label states its rate ("Tax (7%)"). */
+  | { kind: "percentageOf"; elementId: string; baseElementId: string; percent: number }
   | { kind: "sortedBy"; groupId: string; field: "price" | "name"; direction: "asc" | "desc" }
   | { kind: "allItemsContain"; groupId: string; text: string }
   | { kind: "emptyStateShown" }

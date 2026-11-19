@@ -230,7 +230,7 @@ export const scoreElement = (element: InventoryElement, context: ClassifyContext
     else if (matchesAnyTerm(element.name || content, PURPOSE_TERMS.total)) add("total", 5);
     else if (!isFee) {
       add("price", 2);
-      // Mostly an amount ("฿7,990", "$29.99", "฿7,990 ต่อชิ้น").
+      // Mostly an amount: a bare price, or a price with a short unit word ("ต่อชิ้น", "each").
       if (content.replace(MONEY_PATTERN, "").trim().length <= 10) add("price", 2);
       if (element.groupId) add("price", 1);
     }

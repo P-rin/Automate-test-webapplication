@@ -46,6 +46,8 @@ export interface TestPlan {
   targetElement?: string;
   /** Input value(s) or start state being exercised (e.g. "quantity=0", "light -> dark"); "" when none. */
   inputVariant?: string;
+  /** GENERATION_MODE=ecommerce: structured steps + oracle compiled by code (services/ecommerce/storedCase.ts). */
+  structured?: Record<string, unknown>;
 }
 
 export interface RequirementUnit {

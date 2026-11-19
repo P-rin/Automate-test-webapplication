@@ -218,6 +218,8 @@ interface GenerationCaseProgress {
   page: string;
   pageId?: string;
   snapshotId?: string;
+  /** Structured steps + oracle (ecommerce mode); compiled instead of asking the script model. */
+  structured?: Record<string, unknown>;
   status: "planned" | "generating" | "saved" | "failed";
   testCaseId?: string;
   errorMessage?: string;
@@ -1067,6 +1069,7 @@ export const buildPlannedGenerationCase = (
   expectedResult: plan.expectedResult,
   ...(plan.requirementIds ? { requirementIds: [...plan.requirementIds] } : {}),
   ...(plan.category ? { category: plan.category } : {}),
+  ...(plan.structured ? { structured: plan.structured } : {}),
   page,
   ...(pageId ? { pageId } : {}),
   snapshotId,
@@ -1198,12 +1201,6 @@ export const processGenerateJob = async (
   let acceptanceCriteria: AcceptanceCriterion[] = payload.confirmedAcceptanceCriteria ?? [];
   const metrics = new GenerationMetricsCollector(env.generationMode);
   options = { ...options, metricsHooks: metrics.hooks };
-  // GENERATION_MODE branch point: "legacy" keeps the original planner untouched; "ecommerce" routes each
-  // snapshot through services/ecommerce/pipeline.ts. Discovery and AC analysis are shared by both modes.
-  const snapshotPlanner = selectSnapshotPlanner(env.generationMode);
-  if (snapshotPlanner.mode === "ecommerce") {
-    console.info(`[generation ${jobId}] GENERATION_MODE=ecommerce: stages [${snapshotPlanner.stages.join(", ")}] + legacy planner`);
-  }
 
   try {
     if (hasSpecification && !isResume) {
@@ -1264,6 +1261,15 @@ export const processGenerateJob = async (
       message: payload.phase === "selected-pages" ? "Building snapshots for selected pages" : "Building accessibility snapshot",
     });
     const loginCredentials = await getJobCredentials(jobId);
+    // GENERATION_MODE branch point: "legacy" keeps the original planner untouched; "ecommerce" routes each
+    // snapshot through services/ecommerce/pipeline.ts. Discovery and AC analysis are shared by both modes.
+    const snapshotPlanner = selectSnapshotPlanner(env.generationMode, {
+      hasLogin: Boolean(loginCredentials),
+      pagesRequiringLogin: (payload.selectedPages ?? []).filter((page) => page.requiresLogin).map((page) => page.sampleUrl),
+    });
+    if (snapshotPlanner.mode === "ecommerce") {
+      console.info(`[generation ${jobId}] GENERATION_MODE=ecommerce: stages [${snapshotPlanner.stages.join(", ")}]`);
+    }
     const discovery = payload.phase === "selected-pages"
       ? await discoverSelectedPageSnapshots(
         payload.targetUrl,
@@ -1321,7 +1327,7 @@ export const processGenerateJob = async (
           }
           caseKeys.add(normalizedTitle);
           caseCount += 1;
-          metrics.recordPlanned({ category: plan.category, page: snapshot.title });
+          metrics.recordPlanned({ category: plan.category, page: snapshot.title, pageType: typeof plan.structured?.pageType === "string" ? plan.structured.pageType : undefined });
           const caseProgress = buildPlannedGenerationCase(plan, caseCount, snapshot.title, snapshotIds[snapshotIndex], snapshot.pageId);
 
           await updateGenerationCase(jobId, caseProgress.id, caseProgress);
@@ -1398,7 +1404,7 @@ export const processGenerateJob = async (
         }
         caseKeys.add(normalizedTitle);
         caseCount += 1;
-        metrics.recordPlanned({ category: plan.category, page: snapshot.title });
+        metrics.recordPlanned({ category: plan.category, page: snapshot.title, pageType: typeof plan.structured?.pageType === "string" ? plan.structured.pageType : undefined });
         const snapshotIndex = snapshots.indexOf(snapshot);
         const caseProgress = buildPlannedGenerationCase(
           plan,

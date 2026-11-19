@@ -21,7 +21,7 @@ export const IMPORTANT_TEXT_TERMS = [
   "ไม่พบ", "ว่าง", "ผิดพลาด", "ไม่ถูกต้อง", "ไม่สำเร็จ", "กรุณา", "ต้อง", "ชิ้น",
 ];
 
-/** Currency amount anywhere in a string: "฿7,990", "$29.99", "1,200 บาท", "-฿0". */
+/** Currency amount anywhere in a string: baht/dollar/euro/pound sign + number, "1,200 บาท", negative amounts. */
 export const MONEY_PATTERN = /(?:[฿$€£]\s?-?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:บาท|THB|USD|EUR))/i;
 
 const ENGLISH_TERM = /^[a-z][a-z -]*$/;

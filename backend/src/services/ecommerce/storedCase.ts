@@ -16,6 +16,7 @@ export interface StoredStructuredCase {
   steps: StructuredStep[];
   oracle: Oracle;
   preconditionId?: string;
+  loggedOut?: boolean;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -31,6 +32,7 @@ export const parseStoredStructuredCase = (value: unknown): StoredStructuredCase 
     steps: value.steps as StructuredStep[],
     oracle: value.oracle as Oracle,
     ...(typeof value.preconditionId === "string" ? { preconditionId: value.preconditionId } : {}),
+    ...(value.loggedOut === true ? { loggedOut: true } : {}),
   };
 };
 
@@ -43,7 +45,13 @@ export const compileStoredCase = (
 ): CompiledCase => {
   const inventory = buildInventory(snapshot);
   const compiled = compileCase(
-    { titleTh: title, steps: stored.steps, oracle: stored.oracle, ...(stored.preconditionId ? { preconditionId: stored.preconditionId } : {}) },
+    {
+      titleTh: title,
+      steps: stored.steps,
+      oracle: stored.oracle,
+      ...(stored.preconditionId ? { preconditionId: stored.preconditionId } : {}),
+      ...(stored.loggedOut ? { loggedOut: true } : {}),
+    },
     { inventory, fullSnapshot: snapshot, ...(preconditions ? { preconditions } : {}) },
   );
   validateGeneratedScript(compiled.script);

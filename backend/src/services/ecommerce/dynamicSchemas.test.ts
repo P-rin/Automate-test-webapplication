@@ -277,3 +277,11 @@ test("selectOption must name an existing option and tick/fill map to structured 
     ]);
   }
 });
+
+test("a URL written as visible text becomes a URL check (or is rejected without stable URLs)", () => {
+  const answer = exploratory({ oracle: { kind: "textVisible", elementId: "", text: "/whitelist" } });
+  const result = parseExploratoryResponse(answer, { elements: cartElements, acIds: [] });
+  assert.equal(result.status, "case");
+  if (result.status === "case") assert.deepEqual(result.case.oracle, { kind: "urlContains", fragment: "/whitelist" });
+  assert.equal(parseExploratoryResponse(answer, { elements: cartElements, acIds: [], allowUrlOracles: false }).status, "invalid");
+});

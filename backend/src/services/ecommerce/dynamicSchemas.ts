@@ -427,6 +427,15 @@ const toOracle = (
   switch (kind) {
     case "textVisible":
       if (!text) break;
+      // A path or URL is not visible text (seen: textVisible("/whitelist") after a click): it is a URL check.
+      if (/^(\/|https?:\/\/)\S*$/i.test(text)) {
+        if (!allowUrlOracles) {
+          issues.push(`oracle textVisible: ${JSON.stringify(text)} is a URL, and this page has no stable URL`);
+          return undefined;
+        }
+        issues.push(`oracle textVisible: ${JSON.stringify(text)} is a URL; checked with urlContains`);
+        return { kind: "urlContains", fragment: text };
+      }
       return { kind, text };
     case "urlContains":
       if (!text) break;

@@ -188,6 +188,8 @@ export interface CompilableCase {
   steps: StructuredStep[];
   oracle: Oracle;
   preconditionId?: string;
+  /** Start without the runner's pre-login session (storageState). */
+  loggedOut?: boolean;
 }
 
 export interface CompiledCase {
@@ -236,6 +238,8 @@ export const compileCase = (testCase: CompilableCase, context: CompileContext): 
   const script = [
     "import { test, expect } from '@playwright/test';",
     "",
+    // The runner's globalSetup logs in and shares its session; an empty storageState starts logged out.
+    ...(testCase.loggedOut ? ["test.use({ storageState: { cookies: [], origins: [] } });", ""] : []),
     `test(${quote(title)}, async ({ page }) => {`,
     ...body.map((line) => `${INDENT}${line}`),
     "});",
