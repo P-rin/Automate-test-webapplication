@@ -585,7 +585,7 @@ export const generateCaseScript = async (
   try {
     const compiled = compileStoredCase(plan.title, structured, payload.accessibilitySnapshot);
     report({ attempt: 1, passed: true });
-    return { id: plan.id, title: compiled.title, script: compiled.script };
+    return { id: plan.id, title: compiled.title, script: compiled.script, requiresPlaywrightEngine: compiled.requiresPlaywrightEngine };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     report({ attempt: 1, passed: false, reason: message });
@@ -641,6 +641,7 @@ const generateAndSaveCaseScript = async (
     // processGenerationJobScripts only claims cases of jobs owned by the requesting user.
     ownerUid: String(job.ownerUid),
     ...(typeof generationCase.pageId === "string" ? { pageId: generationCase.pageId } : {}),
+    ...(generated.requiresPlaywrightEngine ? { requiresPlaywrightEngine: true } : {}),
   });
 
   await updateGenerationCaseFields(jobId, caseId, {
@@ -1028,6 +1029,7 @@ export const retryFailedGenerationCase = async (
       generationCaseId: caseId,
       ownerUid,
       ...(typeof generationCase.pageId === "string" ? { pageId: generationCase.pageId } : {}),
+      ...(generated.requiresPlaywrightEngine ? { requiresPlaywrightEngine: true } : {}),
     });
 
     await caseRef.update({

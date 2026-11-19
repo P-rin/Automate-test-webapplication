@@ -234,7 +234,7 @@ test("SPA pages: navigation path clicks are replayed and reloads re-navigate", (
   validateGeneratedScript(compiled.script);
 });
 
-test("oracles compile to web-first assertions; computed oracles wait for Phase 5", () => {
+test("oracles compile to web-first assertions; group oracles need the inventory", () => {
   const context = { locate: (id: string) => `page.getByRole("button", { name: ${JSON.stringify(id)} })`, startUrl: "https://shop.example/cart", renavigate: () => [] };
   const cases: Array<[Oracle, string]> = [
     [{ kind: "textVisible", text: "ไม่พบสินค้า" }, "await expect(page.getByText(\"ไม่พบสินค้า\").first()).toBeVisible();"],
@@ -246,14 +246,8 @@ test("oracles compile to web-first assertions; computed oracles wait for Phase 5
     [{ kind: "urlUnchanged" }, "await expect(page).toHaveURL(\"https://shop.example/cart\");"],
   ];
   for (const [oracle, expected] of cases) assert.deepEqual(compileOracle(oracle, context).after, [expected]);
-  for (const oracle of [
-    { kind: "sortedBy", groupId: "G1", field: "price", direction: "asc" },
-    { kind: "lineTotalEquals", priceElementId: "E1", qtyElementId: "E2", lineTotalElementId: "E3" },
-    { kind: "countChangedBy", elementId: "E1", delta: 1 },
-    { kind: "validationMessageShown", elementId: "E1" },
-  ] as Oracle[]) {
-    assert.throws(() => compileOracle(oracle, context), UnsupportedOracleError);
-  }
+  // Group oracles locate every card of the set, so they cannot compile without the inventory.
+  assert.throws(() => compileOracle({ kind: "sortedBy", groupId: "G1", field: "price", direction: "asc" }, context), UnsupportedOracleError);
 });
 
 test("unknown elements and empty titles are rejected", () => {

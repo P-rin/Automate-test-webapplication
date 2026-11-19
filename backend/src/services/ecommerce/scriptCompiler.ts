@@ -17,6 +17,7 @@
 import { parsePlaywrightActions } from "../playwrightActionParser.js";
 import { DYNAMIC_HEADER_TERMS, matchesAnyTerm } from "./keywords.js";
 import { compileOracle, type CompiledOracle } from "./oracleCompiler.js";
+import { helperSources } from "./oracleHelpers.js";
 import { parseSnapshot, type ParsedNode } from "./snapshotCompactor.js";
 import type { ElementInventory, InventoryElement, InventoryGroup, Oracle, StructuredStep } from "./types.js";
 
@@ -53,6 +54,15 @@ export const dynamicNameRegex = (name: string): string => {
   return `/^${escapeRegex(name).replace(/\d+/g, "\\d+")}$/`;
 };
 
+/**
+ * A text that is only an amount or a number ("฿7,990", "$29.99", "2"): it changes with the cart, so it is
+ * located by this pattern (and its position among such texts) rather than by its current value.
+ */
+const VALUE_TEXT_SOURCE = String.raw`^-?(?:[฿$€£¥]\s?)?-?\d[\d,]*(?:\.\d+)?(?:\s?(?:บาท|THB|USD|EUR))?$`;
+const VALUE_TEXT = new RegExp(VALUE_TEXT_SOURCE);
+const isValueText = (element: InventoryElement): boolean =>
+  TEXT_ROLES.has(element.role) && !element.name && !element.textTruncated && VALUE_TEXT.test((element.text ?? "").trim());
+
 /** Text locator target for a text element: the label of a label/value pair, else its text without "…". */
 const textTarget = (element: InventoryElement): { text: string; exact: boolean } => {
   if (element.name) return { text: element.name, exact: true };
@@ -64,6 +74,7 @@ type Matcher = (node: ParsedNode) => boolean;
 
 /** What a locator matches, so duplicates can be counted the way Playwright would match them. */
 const matcherFor = (element: InventoryElement): Matcher => {
+  if (isValueText(element)) return (node) => VALUE_TEXT.test((node.text ?? "").trim());
   if (TEXT_ROLES.has(element.role)) {
     const { text, exact } = textTarget(element);
     return (node) => (node.text ?? "").trim() === text || (!exact && (node.text ?? "").startsWith(text));
@@ -82,6 +93,7 @@ const matcherFor = (element: InventoryElement): Matcher => {
 
 /** Locator call relative to a scope ("page" or a container locator). */
 const locatorCall = (element: InventoryElement): string => {
+  if (isValueText(element)) return `getByText(/${VALUE_TEXT_SOURCE}/)`;
   if (TEXT_ROLES.has(element.role)) {
     const { text, exact } = textTarget(element);
     return `getByText(${quote(text)}${exact ? ", { exact: true }" : ""})`;
@@ -222,7 +234,9 @@ export const compileCase = (testCase: CompilableCase, context: CompileContext): 
     locate,
     startUrl: context.inventory.pageUrl,
     renavigate: () => (context.inventory.urlIsStable ? [] : compileSteps(context.inventory.navigationPath, context)),
+    inventory: context.inventory,
   });
+  const helpers = helperSources(oracle.helpers);
 
   const steps = orderedSteps(testCase, context.inventory);
   const firstOwnStep = steps.findIndex((step) => step.kind !== "precondition" && step.kind !== "goto");
@@ -238,6 +252,8 @@ export const compileCase = (testCase: CompilableCase, context: CompileContext): 
   const script = [
     "import { test, expect } from '@playwright/test';",
     "",
+    // Helpers of computed oracles live in the spec itself so it stays self-contained.
+    ...helpers.flatMap((source) => [source, ""]),
     // The runner's globalSetup logs in and shares its session; an empty storageState starts logged out.
     ...(testCase.loggedOut ? ["test.use({ storageState: { cookies: [], origins: [] } });", ""] : []),
     `test(${quote(title)}, async ({ page }) => {`,
@@ -252,5 +268,10 @@ export const compileCase = (testCase: CompilableCase, context: CompileContext): 
   const mcpUnsupported = parsePlaywrightActions(script, parserEnv)
     .filter((action) => action.kind === "unsupported")
     .map((action) => (action.kind === "unsupported" ? action.detail : ""));
+  // The MCP parser skips lines it does not recognise as actions (helper calls, expect.poll, before-values),
+  // so a computed oracle would silently lose its assertion there: those cases always need playwright.
+  if (oracle.helpers.length > 0 || oracle.before.length > 0 || /expect\.poll\(/.test(script)) {
+    mcpUnsupported.push(`Computed oracle ${testCase.oracle.kind} runs only on the playwright engine`);
+  }
   return { title, script, requiresPlaywrightEngine: mcpUnsupported.length > 0, mcpUnsupported };
 };

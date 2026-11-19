@@ -81,3 +81,20 @@ export const SEARCH_BUTTON_TERMS = ["search", "go", "find", "ค้นหา"];
 export const STEPPER_TERMS = ["increase quantity", "decrease quantity", "increase", "decrease", "increment", "decrement", "เพิ่มจำนวน", "ลดจำนวน"];
 /** Order history / order wording that contains "ซื้อ" (buy) but is not an add-to-cart button. */
 export const ORDER_TERMS = ["คำสั่งซื้อ", "ประวัติการสั่งซื้อ", "การสั่งซื้อ", "order history", "my orders", "orders"];
+
+/** Words of a validation/error message, for the validationMessageShown oracle (Phase 5). */
+export const VALIDATION_ERROR_TERMS = [
+  "required", "invalid", "error", "must", "please enter", "please fill", "please select", "not valid", "at least", "at most",
+  "minimum", "maximum", "cannot be", "too long", "too short", "out of range", "not enough",
+  "กรุณา", "ไม่ถูกต้อง", "จำเป็น", "ต้องระบุ", "ต้องมี", "ต้องเป็น", "ต้องไม่", "ผิดพลาด", "ไม่สามารถ", "ขั้นต่ำ", "สูงสุด", "เกิน", "ไม่เพียงพอ", "ไม่ครบ",
+];
+
+/**
+ * A JS regex literal that matches any of the terms with the same rule as matchesTerm (English whole word,
+ * Thai anywhere), case-insensitively.
+ */
+export const termsRegexLiteral = (terms: readonly string[]): string => {
+  const escape = (term: string) => term.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  const parts = terms.map((term) => ENGLISH_TERM.test(term) ? `\\b${escape(term)}\\b` : escape(term));
+  return `/(?:${parts.join("|")})/i`;
+};

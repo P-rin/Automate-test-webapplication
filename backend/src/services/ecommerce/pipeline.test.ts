@@ -123,7 +123,7 @@ test("candidates the model keeps are stored with its AC mapping; others are drop
     return JSON.stringify({ selections: ids.map((candidateId) => ({ candidateId, keep: true, requirementIds: ["AC-001"], titleTh: `ชื่อใหม่ ${candidateId}` })) });
   };
   const { persisted } = await runPlanner([fixture("saucedemo/inventory")], { ask }, { criteria });
-  assert.ok(persisted.some((plan) => String(plan.structured?.origin) === "template:listing.add_twice"));
+  assert.ok(persisted.some((plan) => String(plan.structured?.origin) === "template:listing.sort"));
   assert.ok(persisted.every((plan) => plan.requirementIds?.includes("AC-001")));
   assert.ok(persisted.every((plan) => plan.title.startsWith("ชื่อใหม่ C")));
 });
@@ -178,7 +178,7 @@ test("nav already shown on an earlier page is hidden from the next page's prompt
   assert.doesNotMatch(exploratory[exploratory.length - 1].prompt, /link "หน้าแรก"/);
 });
 
-test("stored cases compile into scripts (basic oracles; computed ones arrive in Phase 5)", async () => {
+test("stored cases compile into scripts", async () => {
   const snapshot = fixture("react-cart-web/product-detail-out-of-stock");
   const { persisted } = await runPlanner([snapshot], { ask: fakeModel().ask });
   const outOfStock = persisted.find((plan) => String(plan.structured?.origin) === "template:product.out_of_stock")!;

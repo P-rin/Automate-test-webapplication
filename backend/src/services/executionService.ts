@@ -10,6 +10,7 @@ import { getTestCasesByIds, TestCaseAccessError, updateTestCaseStatus } from "./
 import { parsePlaywrightReport } from "./executionReport.js";
 import type { PlaywrightTestOutcome } from "./executionReport.js";
 import type { ExecutionTestCase } from "./testCaseService.js";
+import { resolveExecutionEngine, type ExecutionEngine } from "./executionEngine.js";
 import { credentialsToTestEnv, getCredentialsForJobs, redactSecret } from "./credentialService.js";
 import { matchesName, parsePlaywrightActions } from "./playwrightActionParser.js";
 import type { ParsedAction } from "./playwrightActionParser.js";
@@ -183,7 +184,6 @@ interface SnapshotElement {
   label?: string;
 }
 
-type ExecutionEngine = "playwright" | "mcp";
 
 interface StartExecutionOptions {
   /** Firebase uid of the requesting user; every test case must belong to them. */
@@ -197,26 +197,6 @@ interface StartExecutionResult {
   engineUsed: ExecutionEngine;
   fallbackReason?: string;
 }
-
-const asExecutionEngine = (value: string | undefined): ExecutionEngine => {
-  return value === "mcp" ? "mcp" : "playwright";
-};
-
-const resolveExecutionEngine = (requested?: ExecutionEngine): {
-  engineRequested: ExecutionEngine;
-  engineUsed: ExecutionEngine;
-  fallbackReason: string;
-} => {
-  const engineRequested = requested ?? asExecutionEngine(env.executionEngine);
-  const engineUsed: ExecutionEngine = "playwright";
-  return {
-    engineRequested,
-    engineUsed,
-    fallbackReason: engineRequested === "mcp"
-      ? "Execution now uses Playwright runtime. MCP remains enabled for generation only."
-      : "",
-  };
-};
 
 const normalizeCommand = (command: string): string => command.trim().toLowerCase();
 
@@ -1506,7 +1486,7 @@ export const startExecution = async (
     throw new TestCaseAccessError();
   }
 
-  const resolution = resolveExecutionEngine(options.requestedEngine);
+  const resolution = resolveExecutionEngine(options.requestedEngine, env.executionEngine, cases);
 
   // Check if there's already a running job
   const runningJobs = await db

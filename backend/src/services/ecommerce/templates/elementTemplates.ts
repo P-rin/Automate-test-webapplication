@@ -11,6 +11,7 @@ import {
   formSubmitFor,
   groupOf,
   inGroup,
+  isFinalOrderButton,
   isLoginish,
   nearbyButtons,
   safeSubmitFor,
@@ -46,6 +47,12 @@ const singleFieldSteps = (context: TemplateContext, field: InventoryElement, val
 const validationOracle = (context: TemplateContext, field: InventoryElement) => {
   const submit = formSubmitFor(context, field);
   return { kind: "validationMessageShown" as const, elementId: field.id, ...(submit ? { submitElementId: submit.id } : {}) };
+};
+
+/** The field's own form submit exists and the test may click it. */
+const canSubmitForm = (context: TemplateContext, field: InventoryElement): boolean => {
+  const submit = formSubmitFor(context, field);
+  return Boolean(submit && !submit.attrs?.disabled && (context.allowMutatingTests || !isFinalOrderButton(submit)));
 };
 
 const isLoginForm = (context: TemplateContext): boolean => context.pageType === "login";
@@ -164,7 +171,9 @@ export const whitespaceTemplate: CaseTemplate = {
   description: "Only spaces in a required text field",
   appliesTo: (context) => context.inventory.elements.filter((element) => element.role === "textbox" && element.interactive
     && !element.attrs?.disabled && Boolean(element.attrs?.required) && !FREE_TEXT_EXCLUDED.has(element.purpose ?? "")),
-  build: (context, element) => element ? [{
+  // Spaces satisfy the native `required` check, so only the app's own check on submit can reject them:
+  // without a form submit the test may click, the case could never pass (found in the Phase 5 live run).
+  build: (context, element) => element && canSubmitForm(context, element) ? [{
     templateId: "text.whitespace",
     category: "validation",
     mandatory: false,

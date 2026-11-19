@@ -63,14 +63,15 @@ test("an SPA state without a meaningful URL is classified from its content", () 
 // ---------------------------------------------------------------------------------------------
 // Listing and product pages
 
-test("add to cart: a counting header badge gives countChangedBy(+1) and an add-twice variant", () => {
+test("add to cart: a counting header badge gives countChangedBy(+1); no add-twice on a card button", () => {
   const { byTemplate, element } = candidatesFor("saucedemo/inventory");
   const [add] = byTemplate("listing.add_to_cart");
   assert.equal(add.mandatory, true);
   assert.deepEqual(add.oracle, { kind: "countChangedBy", elementId: add.oracle.kind === "countChangedBy" ? add.oracle.elementId : "", delta: 1 });
   assert.equal(element((add.oracle as { elementId: string }).elementId).purpose, "cart_badge");
   assert.equal(element(add.targetElementId).groupId, "G1", "the representative card");
-  assert.equal(byTemplate("listing.add_twice")[0].oracle.kind, "countChangedBy");
+  // saucedemo turns the card button into "Remove" after one click (found in the Phase 5 live run).
+  assert.equal(byTemplate("listing.add_twice").length, 0);
 });
 
 test("add to cart without a counter opens the cart and looks for the product (REACT_CART_WEB_PROFILE.md §6.3)", () => {

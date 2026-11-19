@@ -85,4 +85,6 @@ export interface GeneratedTestCase {
   id: string;
   title: string;
   script: string;
+  /** Compiled with computed assertions that only the Playwright engine runs (GENERATION_MODE=ecommerce). */
+  requiresPlaywrightEngine?: boolean;
 }

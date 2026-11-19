@@ -73,7 +73,9 @@ export const addToCartTemplate: CaseTemplate = {
         oracle: { kind: "countChangedBy", elementId: badge.id, delta: 1 },
         expectedResultTh: `ตัวเลขที่ ${describe(badge)} เพิ่มขึ้น 1`,
       });
-      drafts.push({
+      // A card's add button often turns into "remove" once clicked, so clicking it twice is only tested
+      // where the button stays (a product page's own button, outside repeated cards).
+      if (!button.groupId) drafts.push({
         templateId: "listing.add_twice", category: "boundary", mandatory: false, targetElementId: button.id, inputVariant: "add=2",
         titleTh: `กด "${button.name}"${name ? ` ของ "${name}"` : ""} สองครั้ง`,
         steps: [{ kind: "click", elementId: button.id }, { kind: "click", elementId: button.id }],

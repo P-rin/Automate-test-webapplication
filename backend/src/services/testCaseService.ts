@@ -15,6 +15,8 @@ interface SaveTestInput {
   generationJobId?: string;
   generationCaseId?: string;
   pageId?: string;
+  /** The script uses computed assertions the MCP engine cannot replay (GENERATION_MODE=ecommerce). */
+  requiresPlaywrightEngine?: boolean;
 }
 
 export interface ExecutionTestCase {
@@ -24,6 +26,7 @@ export interface ExecutionTestCase {
   script: string;
   ownerUid?: string;
   generationJobId?: string;
+  requiresPlaywrightEngine?: boolean;
 }
 
 export const saveGeneratedTestCase = async (input: SaveTestInput): Promise<string> => {
@@ -40,6 +43,7 @@ export const saveGeneratedTestCase = async (input: SaveTestInput): Promise<strin
     ...(input.generationJobId ? { generationJobId: input.generationJobId } : {}),
     ...(input.generationCaseId ? { generationCaseId: input.generationCaseId } : {}),
     ...(input.pageId ? { pageId: input.pageId } : {}),
+    ...(input.requiresPlaywrightEngine ? { requiresPlaywrightEngine: true } : {}),
     lastStatus: "pending",
     lastRunAt: null,
     createdAt: FieldValue.serverTimestamp(),
@@ -64,6 +68,7 @@ export const getTestCasesByIds = async (ids: string[]) => {
         ...(typeof data.generationJobId === "string" && data.generationJobId
           ? { generationJobId: data.generationJobId }
           : {}),
+        ...(data.requiresPlaywrightEngine === true ? { requiresPlaywrightEngine: true } : {}),
       } satisfies ExecutionTestCase;
     });
 };
