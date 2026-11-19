@@ -22,3 +22,15 @@ test("shouldPreLogin is false when the job has no credentials", () => {
   assert.equal(shouldPreLogin("await page.goto('https://example.com/');", undefined), false);
   assert.equal(shouldPreLogin("await page.goto('https://example.com/');", null), false);
 });
+
+test("pre-login saves IndexedDB so Firebase-style sessions survive", async () => {
+  const { PRE_LOGIN_SETUP_SOURCE } = await import("./preLoginSetup.js");
+  assert.match(PRE_LOGIN_SETUP_SOURCE, /storageState\(\{ path: statePath, indexedDB: true \}\)/);
+});
+
+test("pre-login looks for a login page beyond the target URL and site root", async () => {
+  const { PRE_LOGIN_SETUP_SOURCE } = await import("./preLoginSetup.js");
+  assert.match(PRE_LOGIN_SETUP_SOURCE, /'\/login'/);
+  assert.match(PRE_LOGIN_SETUP_SOURCE, /LOGIN_LINK_PATTERN/);
+  assert.doesNotMatch(PRE_LOGIN_SETUP_SOURCE, /actprin|secret_sauce|standard_user/);
+});

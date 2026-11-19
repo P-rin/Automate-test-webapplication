@@ -32,6 +32,8 @@ export const shouldPreLogin = (script: string, credentials: LoginCredentials | n
 export const PRE_LOGIN_SETUP_SOURCE = `import { chromium } from '@playwright/test';
 
 const PASSWORD_SELECTOR = 'input[type="password"]:visible';
+const LOGIN_PATHS = ['/login', '/signin', '/sign-in', '/account/login', '/auth/login'];
+const LOGIN_LINK_PATTERN = '(log-?in|sign-?in|เข้าสู่ระบบ|ลงชื่อเข้าใช้)';
 
 export default async function preLogin(): Promise<void> {
   const targetUrl = process.env.${PRE_LOGIN_ENV.url} ?? '';
@@ -47,10 +49,16 @@ export default async function preLogin(): Promise<void> {
     const context = await browser.newContext();
     const page = await context.newPage();
 
-    // The target page usually redirects to the login form; otherwise try the site root.
-    const candidates = [...new Set([targetUrl, new URL(targetUrl).origin + '/'])];
+    // The target page usually redirects to the login form; otherwise try the site root, then a
+    // login link seen on those pages, then common login paths.
+    const origin = new URL(targetUrl).origin;
+    const candidates = [targetUrl, origin + '/'];
+    const tried = new Set<string>();
     let foundForm = false;
-    for (const url of candidates) {
+    for (let index = 0; index < candidates.length && index < 8; index += 1) {
+      const url = candidates[index];
+      if (tried.has(url)) continue;
+      tried.add(url);
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       try {
         await page.locator(PASSWORD_SELECTOR).first().waitFor({ state: 'visible', timeout: 5_000 });
@@ -59,9 +67,20 @@ export default async function preLogin(): Promise<void> {
       } catch {
         // No login form here; try the next candidate.
       }
+      if (index === 1) {
+        const loginLinks = await page.evaluate((loginPattern) => {
+          const pattern = new RegExp(loginPattern, 'i');
+          return Array.from(document.querySelectorAll('a[href]'))
+            .filter((link) => link.getClientRects().length > 0)
+            .filter((link) => pattern.test(link.getAttribute('href') ?? '') || pattern.test(link.textContent ?? ''))
+            .map((link) => (link as HTMLAnchorElement).href)
+            .filter((href) => href.startsWith(location.origin));
+        }, LOGIN_LINK_PATTERN).catch(() => [] as string[]);
+        candidates.push(...loginLinks.slice(0, 2), ...LOGIN_PATHS.map((path) => origin + path));
+      }
     }
     if (!foundForm) {
-      throw new Error('Pre-login: no login form (password field) found at ' + candidates.join(' or '));
+      throw new Error('Pre-login: no login form (password field) found at ' + [...tried].join(' or '));
     }
 
     const passwordField = page.locator(PASSWORD_SELECTOR).first();
@@ -104,7 +123,10 @@ export default async function preLogin(): Promise<void> {
     }
 
     await page.waitForLoadState('domcontentloaded');
-    await context.storageState({ path: statePath });
+    // Let client-side auth (e.g. Firebase) finish writing its session before saving it.
+    await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
+    // indexedDB: sites like Firebase Auth keep the session there, not in cookies/localStorage.
+    await context.storageState({ path: statePath, indexedDB: true });
   } finally {
     await browser.close();
   }
