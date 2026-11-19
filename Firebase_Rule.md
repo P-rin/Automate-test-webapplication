@@ -2,12 +2,23 @@
 
 เอกสารนี้สรุป Rules ที่ควรใช้ให้ตรงกับสถาปัตยกรรมของระบบนี้:
 
-- ข้อมูลหลักเก็บใน Firestore (`testCases`, `testRuns`)
+- ข้อมูลหลักเก็บใน Firestore (`projects`, `testCases`, `testRuns`) ทุกเอกสารมี `ownerUid`
 - รูป screenshot ไม่ใช้ Firebase Storage (ใช้ Local static server)
-- Frontend อ่าน `testCases` และ `testRuns` จาก Firestore
+- Frontend อ่าน `projects`, `testCases` และ `testRuns` จาก Firestore โดย query ด้วย `where('ownerUid', '==', uid)` เสมอ
 - Frontend อ่านสถานะ generation job ผ่าน authenticated backend API; ไม่อ่าน `generationJobs` จาก Firestore โดยตรง
 
-## 1) Firestore Rules (โหมดที่ควรใช้ตอนนี้: มี Login/Register)
+## 0) Rules ที่ใช้อยู่ปัจจุบัน: อ่านได้เฉพาะเจ้าของ
+
+Rules ฉบับปัจจุบันอยู่ที่ [firestore.rules](firestore.rules) และ index ที่ต้องมีอยู่ที่ [firestore.indexes.json](firestore.indexes.json)
+
+- อ่าน `projects`, `testCases`, `testRuns` ได้เฉพาะเอกสารที่ `ownerUid == request.auth.uid`
+- เขียนได้เฉพาะ backend (Admin SDK)
+- ทุกคอลเลกชันอื่น รวมถึง `generationJobs` และ `generationJobCredentials` ปิดทั้งหมด
+- ข้อมูลเดิมถูกเติม `ownerUid` แล้วด้วย `backend/scripts/backfill-owner-uid.ts`
+
+หัวข้อ 1–2 ด้านล่างเป็น Rules แบบเดิม (ผู้ใช้ที่ login แล้วอ่านข้อมูลของทุกคนได้) เก็บไว้เป็นประวัติ ไม่ควรนำไปใช้แล้ว
+
+## 1) Firestore Rules แบบเดิม (เลิกใช้แล้ว)
 
 หลังเพิ่มหน้า Login/Register แล้ว แนะนำให้บังคับว่าเฉพาะผู้ใช้ที่ล็อกอินเท่านั้นจึงอ่านข้อมูลได้ และยังคงให้เขียนผ่าน Backend เท่านั้น
 

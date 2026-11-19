@@ -125,6 +125,42 @@ const getRequestSummary = (input: RequestInfo | URL, init?: RequestInit): Record
   };
 };
 
+const isNdjson = (contentType: string | null): boolean => /ndjson/i.test(contentType ?? "");
+
+/** Collapses an NDJSON chat stream into one summary object so the log stays readable. */
+const summarizeNdjsonBody = (body: string): string => {
+  let content = "";
+  let thinking = "";
+  const toolCalls: unknown[] = [];
+  let last: Record<string, unknown> = {};
+  let chunkCount = 0;
+  for (const line of body.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const chunk = JSON.parse(line) as Record<string, unknown>;
+      chunkCount += 1;
+      last = chunk;
+      const message = chunk.message as { content?: unknown; thinking?: unknown; tool_calls?: unknown } | undefined;
+      if (typeof message?.content === "string") content += message.content;
+      if (typeof message?.thinking === "string") thinking += message.thinking;
+      if (Array.isArray(message?.tool_calls)) toolCalls.push(...message.tool_calls);
+    } catch {
+      // Ignore a partial trailing line from an aborted stream.
+    }
+  }
+  const { message: _message, ...rest } = last;
+  return JSON.stringify({
+    ...rest,
+    streamChunkCount: chunkCount,
+    message: {
+      role: "assistant",
+      content,
+      ...(thinking ? { thinking } : {}),
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    },
+  });
+};
+
 const getModelMetrics = (responseBody: string): Record<string, number> | undefined => {
   try {
     const response = JSON.parse(responseBody) as Record<string, unknown>;
@@ -170,30 +206,43 @@ export const createOllamaDebugFetch = (
 
     try {
       const response = await fetchImplementation(input, init);
-      let responseBody = "";
-      let bodyCaptureError: unknown;
+      const headersDurationMs = Date.now() - startedAt;
+      const contentType = response.headers.get("content-type");
+      const streamed = isNdjson(contentType);
 
-      try {
-        responseBody = await response.clone().text();
-      } catch (error) {
-        bodyCaptureError = serializeOllamaDebugError(error);
-      }
+      const captureBody = async (): Promise<void> => {
+        let responseBody = "";
+        let bodyCaptureError: unknown;
 
-      const modelMetrics = getModelMetrics(responseBody);
-      await writeSafely({
-        event: "response",
-        requestId,
-        requestNumber,
-        httpStatus: response.status,
-        ok: response.ok,
-        contentType: response.headers.get("content-type"),
-        durationMs: Date.now() - startedAt,
-        responseBody: responseBody.slice(0, MAX_RESPONSE_BODY_CHARS),
-        responseBodyChars: responseBody.length,
-        responseBodyTruncated: responseBody.length > MAX_RESPONSE_BODY_CHARS,
-        ...(modelMetrics ? { modelMetrics } : {}),
-        ...(bodyCaptureError ? { bodyCaptureError } : {}),
-      });
+        try {
+          responseBody = await response.clone().text();
+        } catch (error) {
+          bodyCaptureError = serializeOllamaDebugError(error);
+        }
+        if (streamed) responseBody = summarizeNdjsonBody(responseBody);
+
+        const modelMetrics = getModelMetrics(responseBody);
+        await writeSafely({
+          event: "response",
+          requestId,
+          requestNumber,
+          httpStatus: response.status,
+          ok: response.ok,
+          contentType,
+          streamed,
+          headersDurationMs,
+          durationMs: Date.now() - startedAt,
+          responseBody: responseBody.slice(0, MAX_RESPONSE_BODY_CHARS),
+          responseBodyChars: responseBody.length,
+          responseBodyTruncated: responseBody.length > MAX_RESPONSE_BODY_CHARS,
+          ...(modelMetrics ? { modelMetrics } : {}),
+          ...(bodyCaptureError ? { bodyCaptureError } : {}),
+        });
+      };
+
+      // A streamed body must reach the caller chunk by chunk, so capture it in the background.
+      if (streamed) void captureBody();
+      else await captureBody();
 
       return response;
     } catch (error) {

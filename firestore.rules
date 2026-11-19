@@ -1,0 +1,37 @@
+rules_version = '2';
+
+// Owner-based read rules.
+// - The browser may only read documents whose ownerUid is the signed-in user, so every
+//   client query must include where('ownerUid', '==', uid) or Firestore rejects it.
+// - All writes go through the backend (firebase-admin bypasses these rules), so clients
+//   can never write.
+// - generationJobs (and its cases/snapshots), generationJobCredentials and everything
+//   else stay closed: the browser reads jobs through the authenticated backend API.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner() {
+      return request.auth != null
+        && resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /projects/{projectId} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+
+    match /testCases/{testCaseId} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+
+    match /testRuns/{runId} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

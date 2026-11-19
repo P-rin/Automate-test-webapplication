@@ -2,6 +2,7 @@ import { db, FieldValue, Timestamp } from "../lib/firestore.js";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { env } from "../config/env.js";
 import { saveGeneratedTestCase } from "./testCaseService.js";
+import { getJobCredentials, saveJobCredentials, type LoginCredentials } from "./credentialService.js";
 import { discoverAccessibilitySnapshot, discoverPages, discoverSelectedPageSnapshots } from "./snapshotService.js";
 import {
   processSnapshotTestPlans,
@@ -10,8 +11,10 @@ import {
   LlmGenerationOptions,
   sanitizePlanTraceability,
 } from "./ollamaService.js";
+import { PlanCoverageRegistry } from "./planDedup.js";
 import { TEST_PLAN_CATEGORIES, type AcceptanceCriterion, type GenerationPage, type RequirementUnit, type TestPlan } from "../types.js";
 import { toProjectId } from "../utils/project.js";
+import { touchProject } from "./projectService.js";
 import { cacheCasePatch, cacheCreatedJob, cacheJobPatch, cacheTimestampNow, dropJobCache } from "./jobProgressCache.js";
 import { generateAcceptanceCriteria, splitRequirementUnitsWithWarnings } from "./requirementService.js";
 import { findBestSnapshotForCriterion, type CriterionMatchSnapshot } from "./criterionMatching.js";
@@ -27,6 +30,8 @@ interface GenerationJobPayload {
   phase?: "page-discovery" | "selected-pages";
   confirmedAcceptanceCriteria?: AcceptanceCriterion[];
   selectedPages?: GenerationPage[];
+  /** Only used when creating the job; stored separately via credentialService. */
+  loginCredentials?: LoginCredentials | null;
 }
 
 const cacheableFirestoreValue = (value: unknown): boolean => {
@@ -87,7 +92,9 @@ export const createGenerationJob = async (payload: GenerationJobPayload): Promis
     specification: payload.specification,
     allowMutatingTests: payload.allowMutatingTests ?? false,
     humanReview: payload.humanReview ?? false,
+    hasLoginCredentials: Boolean(payload.loginCredentials),
     ...(payload.ownerUid ? { ownerUid: payload.ownerUid } : {}),
+    projectId: toProjectId(payload.projectName || payload.targetUrl),
     status: "pending",
     percentage: 0,
     message: "Waiting to start generation",
@@ -109,8 +116,13 @@ export const createGenerationJob = async (payload: GenerationJobPayload): Promis
     startedAt: null,
     completedAt: null,
   };
-  const docRef = await db.collection("generationJobs").add(data);
+  const docRef = db.collection("generationJobs").doc();
+  // Save credentials before the job document exists so that processing can never start
+  // without them; the job itself only records that credentials were provided.
+  if (payload.loginCredentials) await saveJobCredentials(docRef.id, payload.loginCredentials);
+  await docRef.set(data);
   cacheCreatedJob(docRef.id, { ...data, createdAt: cacheTimestampNow() });
+  if (payload.ownerUid) await touchProject(payload.ownerUid, payload.projectName, payload.targetUrl);
 
   return docRef.id;
 };
@@ -288,7 +300,7 @@ const getSnapshotForGenerationCase = async (
     maxSnapshots: env.generationJobMaxSnapshots,
     maxCandidates: env.generationJobMaxCandidates,
     maxDepth: env.generationJobMaxDepth,
-  });
+  }, await getJobCredentials(jobId));
   const matchedSnapshot = findSnapshotForPage(discovery.snapshots, String(generationCase.page ?? ""));
   if (!matchedSnapshot) throw new Error(`Could not rediscover the page/state for "${String(generationCase.page ?? "")}"`);
   return matchedSnapshot.snapshot;
@@ -552,6 +564,8 @@ const generateAndSaveCaseScript = async (
     script: generated.script,
     generationJobId: jobId,
     generationCaseId: caseId,
+    // processGenerationJobScripts only claims cases of jobs owned by the requesting user.
+    ownerUid: String(job.ownerUid),
     ...(typeof generationCase.pageId === "string" ? { pageId: generationCase.pageId } : {}),
   });
 
@@ -771,14 +785,31 @@ export const reconcileInterruptedGenerationJobs = async (): Promise<number> => {
   return snapshot.size + scriptSnapshot.size;
 };
 
-export const listGenerationJobs = async (ownerUid: string): Promise<Record<string, unknown>[]> => {
-  const snapshot = await db.collection("generationJobs").where("ownerUid", "==", ownerUid).get();
-  return snapshot.docs.map((document) => {
-    const data = document.data();
+/**
+ * Lists the owner's jobs. With projectId, only that project's jobs are read (jobs store
+ * projectId); with jobId, only that one job (used to open a job from a link).
+ */
+export const listGenerationJobs = async (
+  ownerUid: string,
+  filter: { projectId?: string; jobId?: string } = {},
+): Promise<Record<string, unknown>[]> => {
+  let documents: FirebaseFirestore.DocumentSnapshot[];
+  if (filter.jobId) {
+    const job = await db.collection("generationJobs").doc(filter.jobId).get();
+    documents = job.exists && job.get("ownerUid") === ownerUid ? [job] : [];
+  } else {
+    let jobsQuery = db.collection("generationJobs").where("ownerUid", "==", ownerUid);
+    if (filter.projectId) jobsQuery = jobsQuery.where("projectId", "==", filter.projectId);
+    documents = (await jobsQuery.get()).docs;
+  }
+  return documents.map((document) => {
+    const data = document.data() ?? {};
     const targetUrl = String(data.targetUrl ?? "");
     return {
       id: document.id,
-      projectId: toProjectId(String(data.projectName ?? targetUrl)),
+      projectId: typeof data.projectId === "string" && data.projectId
+        ? data.projectId
+        : toProjectId(String(data.projectName ?? targetUrl)),
       projectName: String(data.projectName ?? targetUrl),
       targetUrl,
       status: data.status,
@@ -919,6 +950,7 @@ export const retryFailedGenerationCase = async (
       script: generated.script,
       generationJobId: jobId,
       generationCaseId: caseId,
+      ownerUid,
       ...(typeof generationCase.pageId === "string" ? { pageId: generationCase.pageId } : {}),
     });
 
@@ -1038,6 +1070,7 @@ const runGenerationPageDiscovery = async (
       maxDepth: env.generationJobPageMaxDepth,
       maxNavigationActions: env.generationJobPageMaxNavigationActions,
     },
+    await getJobCredentials(jobId),
   );
   if (discovery.pages.length === 0) {
     throw new Error("Page discovery did not find any pages on the target website");
@@ -1148,6 +1181,7 @@ export const processGenerateJob = async (
       percentage: payload.phase === "selected-pages" ? 30 : hasSpecification ? 10 : 0,
       message: payload.phase === "selected-pages" ? "Building snapshots for selected pages" : "Building accessibility snapshot",
     });
+    const loginCredentials = await getJobCredentials(jobId);
     const discovery = payload.phase === "selected-pages"
       ? await discoverSelectedPageSnapshots(
         payload.targetUrl,
@@ -1158,12 +1192,13 @@ export const processGenerateJob = async (
           maxCandidates: env.generationJobMaxCandidates,
           maxDepth: env.generationJobMaxDepth,
         },
+        loginCredentials,
       )
       : await discoverAccessibilitySnapshot(payload.targetUrl, payload.specification, {
         maxSnapshots: env.generationJobMaxSnapshots,
         maxCandidates: env.generationJobMaxCandidates,
         maxDepth: env.generationJobMaxDepth,
-      });
+      }, loginCredentials);
     discoveryFinished = true;
     coverageStopReason = discovery.stopReason ?? "";
     const snapshots = discovery.snapshots;
@@ -1180,6 +1215,8 @@ export const processGenerateJob = async (
 
     const caseKeys = new Set<string>();
     const coveredAcIds = new Set<string>();
+    // One registry for the whole job: later pages see (and are de-duplicated against) earlier pages' cases.
+    const planCoverage = new PlanCoverageRegistry();
     let planningStalled = false;
 
     for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
@@ -1222,6 +1259,7 @@ export const processGenerateJob = async (
         acceptanceCriteria,
         coveredAcIds,
         payload.allowMutatingTests ?? false,
+        planCoverage,
       );
 
       if (planningResult.status === "incomplete") {

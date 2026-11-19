@@ -57,6 +57,9 @@ export const env = {
   ollamaPlannerThink: asBool(process.env.OLLAMA_PLANNER_THINK, false),
   ollamaNumCtx: Number(process.env.OLLAMA_NUM_CTX ?? 8192),
   ollamaKeepAlive: process.env.OLLAMA_KEEP_ALIVE ?? "5m",
+  // Streaming timeouts: total generation time is unlimited while tokens keep arriving.
+  ollamaFirstChunkTimeoutMs: asNonNegativeInteger(process.env.OLLAMA_FIRST_CHUNK_TIMEOUT_MS, 240_000),
+  ollamaIdleTimeoutMs: asNonNegativeInteger(process.env.OLLAMA_IDLE_TIMEOUT_MS, 120_000),
   llmMaxPromptChars: Number(process.env.LLM_MAX_PROMPT_CHARS ?? 14000),
   requirementMaxUnits: asPositiveInteger(process.env.REQUIREMENT_MAX_UNITS, 80),
   requirementMaxCriteria: asPositiveInteger(process.env.REQUIREMENT_MAX_CRITERIA, 60),
@@ -91,5 +94,7 @@ export const buildLlmGenerationOptions = () => ({
   plannerThink: env.ollamaPlannerThink,
   numCtx: env.ollamaNumCtx,
   keepAlive: env.ollamaKeepAlive,
+  firstChunkTimeoutMs: env.ollamaFirstChunkTimeoutMs,
+  idleTimeoutMs: env.ollamaIdleTimeoutMs,
   maxPromptChars: env.llmMaxPromptChars,
 });

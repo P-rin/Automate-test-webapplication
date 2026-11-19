@@ -6,10 +6,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { db, FieldValue } from "../lib/firestore.js";
 import { env } from "../config/env.js";
-import { getTestCasesByIds, updateTestCaseStatus } from "./testCaseService.js";
+import { getTestCasesByIds, TestCaseAccessError, updateTestCaseStatus } from "./testCaseService.js";
 import { parsePlaywrightReport } from "./executionReport.js";
 import type { PlaywrightTestOutcome } from "./executionReport.js";
 import type { ExecutionTestCase } from "./testCaseService.js";
+import { credentialsToTestEnv, getCredentialsForJobs, redactSecret } from "./credentialService.js";
+import { matchesName, parsePlaywrightActions } from "./playwrightActionParser.js";
+import type { ParsedAction } from "./playwrightActionParser.js";
+import { PRE_LOGIN_ENV, PRE_LOGIN_SETUP_FILE, PRE_LOGIN_SETUP_SOURCE, shouldPreLogin } from "./preLoginSetup.js";
+import { withIsolatedBrowserProfile } from "./snapshotService.js";
 
 const runtimeRoot = path.resolve(process.cwd(), "runtime");
 const artifactRoots = {
@@ -24,6 +29,30 @@ const artifactExtensions = new Map<string, "screenshot" | "video" | "trace">([
   [".zip", "trace"],
 ] as const);
 
+/**
+ * Playwright config for a run directory. With preLogin, a globalSetup logs in first and
+ * the test starts from the saved session (see preLoginSetup.ts).
+ */
+const buildPlaywrightConfig = (reportFile: string, preLogin = false): string => [
+  "import { defineConfig } from '@playwright/test';",
+  "",
+  "export default defineConfig({",
+  "  testDir: './tests',",
+  "  timeout: 60_000,",
+  ...(preLogin ? [`  globalSetup: './${PRE_LOGIN_SETUP_FILE}',`] : []),
+  "  use: {",
+  "    screenshot: 'only-on-failure',",
+  "    video: 'retain-on-failure',",
+  "    trace: 'retain-on-failure',",
+  ...(preLogin ? [`    storageState: process.env.${PRE_LOGIN_ENV.statePath},`] : []),
+  "  },",
+  `  retries: ${env.executionRetries},`,
+  `  reporter: [['json', { outputFile: './${reportFile}' }]],`,
+  "  outputDir: './test-results',",
+  "});",
+  "",
+].join("\n");
+
 const buildRunnerFiles = async (runId: string, scripts: string[]): Promise<{ runDir: string; reportPath: string; outputDir: string }> => {
   const runDir = path.join(runtimeRoot, runId);
   const testsDir = path.join(runDir, "tests");
@@ -36,25 +65,8 @@ const buildRunnerFiles = async (runId: string, scripts: string[]): Promise<{ run
     await fs.writeFile(path.join(testsDir, `generated-${i + 1}.spec.ts`), scripts[i], "utf-8");
   }
 
-  const config = [
-    "import { defineConfig } from '@playwright/test';",
-    "",
-    "export default defineConfig({",
-    "  testDir: './tests',",
-    "  timeout: 60_000,",
-    "  use: {",
-    "    screenshot: 'only-on-failure',",
-    "    video: 'retain-on-failure',",
-    "    trace: 'retain-on-failure',",
-    "  },",
-    `  retries: ${env.executionRetries},`,
-    "  reporter: [['json', { outputFile: './report.json' }]],",
-    "  outputDir: './test-results',",
-    "});",
-    "",
-  ].join("\n");
-
-  await fs.writeFile(path.join(runDir, "playwright.config.ts"), config, "utf-8");
+  await fs.writeFile(path.join(runDir, "playwright.config.ts"), buildPlaywrightConfig("report.json"), "utf-8");
+  await fs.writeFile(path.join(runDir, PRE_LOGIN_SETUP_FILE), PRE_LOGIN_SETUP_SOURCE, "utf-8");
 
   return { runDir, reportPath, outputDir };
 };
@@ -105,7 +117,11 @@ const publishArtifacts = async (runId: string, files: string[], port: number): P
   return published;
 };
 
-const runPlaywright = async (cwd: string, pattern?: string): Promise<{ stdout: string; stderr: string; code: number | null }> => {
+const runPlaywright = async (
+  cwd: string,
+  pattern?: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; code: number | null }> => {
   return new Promise((resolve) => {
     const args = ["playwright", "test", "--config", "playwright.config.ts"];
     if (pattern) args.push(pattern);
@@ -117,6 +133,7 @@ const runPlaywright = async (cwd: string, pattern?: string): Promise<{ stdout: s
         cwd,
         shell: true,
         windowsHide: true,
+        env: { ...process.env, ...extraEnv },
       },
     );
 
@@ -166,33 +183,11 @@ interface SnapshotElement {
   label?: string;
 }
 
-type ParsedAction =
-  | { kind: "goto"; url: string }
-  | { kind: "fill"; label: string; value: string }
-  | { kind: "fillTestId"; testId: string; value: string }
-  | { kind: "fillLocator"; selector: string; value: string }
-  | { kind: "fillLocatorNth"; selector: string; index: number; value: string }
-  | { kind: "clickRole"; role: string; name: string }
-  | { kind: "clickText"; text: string }
-  | { kind: "clickTestId"; testId: string }
-  | { kind: "clickLocator"; selector: string }
-  | { kind: "clickLocatorNth"; selector: string; index: number }
-  | { kind: "assertTitle"; expected: string; isRegex: boolean }
-  | { kind: "assertUrl"; expected: string; isRegex: boolean }
-  | { kind: "assertTextRole"; role: string; name: string; expected: string; isRegex: boolean }
-  | { kind: "assertTextText"; text: string; expected: string; isRegex: boolean }
-  | { kind: "assertTextTestId"; testId: string; expected: string; isRegex: boolean }
-  | { kind: "assertTextLocator"; selector: string; expected: string; isRegex: boolean }
-  | { kind: "assertTextLocatorNth"; selector: string; index: number; expected: string; isRegex: boolean }
-  | { kind: "assertVisibleRole"; role: string; name: string }
-  | { kind: "assertVisibleText"; text: string }
-  | { kind: "assertVisibleTestId"; testId: string }
-  | { kind: "assertVisibleLocator"; selector: string }
-  | { kind: "unsupported"; detail: string };
-
 type ExecutionEngine = "playwright" | "mcp";
 
 interface StartExecutionOptions {
+  /** Firebase uid of the requesting user; every test case must belong to them. */
+  ownerUid: string;
   requestedEngine?: ExecutionEngine;
 }
 
@@ -263,7 +258,8 @@ const resolveMcpCommand = (): { command: string; args: string[] } => {
     throw new Error("PLAYWRIGHT_MCP_COMMAND cannot be npx. Use a direct MCP binary (for example: playwright-mcp).");
   }
 
-  const args = env.playwrightMcpArgs.length ? env.playwrightMcpArgs : buildDefaultMcpArgs();
+  // Each MCP test run must start from a clean browser, not one an earlier run left behind.
+  const args = withIsolatedBrowserProfile(env.playwrightMcpArgs.length ? env.playwrightMcpArgs : buildDefaultMcpArgs());
   return { command, args };
 };
 
@@ -332,225 +328,34 @@ const parseSnapshotElements = (snapshot: string): SnapshotElement[] => {
   return elements;
 };
 
-const parseExpectedTextOrRegex = (rawValue: string): { expected: string; isRegex: boolean } | null => {
-  const trimmed = rawValue.trim();
-  const regexMatch = trimmed.match(/^\/(.*)\/[gimsuy]*$/);
-  if (regexMatch?.[1]) {
-    return { expected: regexMatch[1], isRegex: true };
-  }
+const FILLABLE_ROLES = ["textbox", "searchbox", "spinbutton", "combobox"];
 
-  const quotedMatch = trimmed.match(/^["'`](.*)["'`]$/);
-  if (quotedMatch?.[1]) {
-    return { expected: quotedMatch[1], isRegex: false };
-  }
-
-  return null;
+const findFillableElement = (
+  elements: SnapshotElement[],
+  query: string,
+  isRegex: boolean,
+  role?: string,
+): SnapshotElement | null => {
+  const roles = role ? [normalizeText(role)] : FILLABLE_ROLES;
+  return elements.find((element) => {
+    if (!roles.includes(element.role)) return false;
+    return matchesName(element.name, query, isRegex) || matchesName(element.label ?? "", query, isRegex);
+  }) ?? null;
 };
 
-const parsePlaywrightActions = (script: string): ParsedAction[] => {
-  const actions: ParsedAction[] = [];
-  const lines = script.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-
-  for (const line of lines) {
-    const gotoMatch = line.match(/await\s+page\.goto\(\s*['"`]([^'"`]+)['"`]/i);
-    if (gotoMatch?.[1]) {
-      actions.push({ kind: "goto", url: gotoMatch[1].trim() });
-      continue;
-    }
-
-    const fillLabelMatch = line.match(/await\s+page\.getBy(?:Label|Placeholder|Role)\(\s*['"`]([^'"`]+)['"`][^)]*\)\.fill\(\s*['"`]([^'"`]*)['"`]\s*\)/i);
-    if (fillLabelMatch?.[1] !== undefined && fillLabelMatch?.[2] !== undefined) {
-      actions.push({ kind: "fill", label: fillLabelMatch[1].trim(), value: fillLabelMatch[2] });
-      continue;
-    }
-
-    const fillTestIdMatch = line.match(/await\s+page\.getByTestId\(\s*['"`]([^'"`]+)['"`][^)]*\)\.fill\(\s*['"`]([^'"`]*)['"`]\s*\)/i);
-    if (fillTestIdMatch?.[1] !== undefined && fillTestIdMatch?.[2] !== undefined) {
-      actions.push({ kind: "fillTestId", testId: fillTestIdMatch[1].trim(), value: fillTestIdMatch[2] });
-      continue;
-    }
-
-    const fillLocatorMatch = line.match(/await\s+page\.locator\(\s*['"`]([^'"`]+)['"`][^)]*\)\.fill\(\s*['"`]([^'"`]*)['"`]\s*\)/i);
-    if (fillLocatorMatch?.[1] !== undefined && fillLocatorMatch?.[2] !== undefined) {
-      actions.push({ kind: "fillLocator", selector: fillLocatorMatch[1].trim(), value: fillLocatorMatch[2] });
-      continue;
-    }
-
-    const fillLocatorNthMatch = line.match(/await\s+page\.locator\(\s*['"`]([^'"`]+)['"`][^)]*\)\.nth\(\s*(\d+)\s*\)\.fill\(\s*['"`]([^'"`]*)['"`]\s*\)/i);
-    if (fillLocatorNthMatch?.[1] !== undefined && fillLocatorNthMatch?.[2] !== undefined && fillLocatorNthMatch?.[3] !== undefined) {
-      actions.push({
-        kind: "fillLocatorNth",
-        selector: fillLocatorNthMatch[1].trim(),
-        index: Number(fillLocatorNthMatch[2]),
-        value: fillLocatorNthMatch[3],
-      });
-      continue;
-    }
-
-    const clickRoleMatch = line.match(/await\s+page\.getByRole\(\s*['"`]([^'"`]+)['"`]\s*,\s*\{\s*name:\s*['"`]([^'"`]+)['"`][^}]*\}\s*\)\.click\(/i);
-    if (clickRoleMatch?.[1] && clickRoleMatch?.[2]) {
-      actions.push({ kind: "clickRole", role: clickRoleMatch[1].trim().toLowerCase(), name: clickRoleMatch[2].trim() });
-      continue;
-    }
-
-    const clickTextMatch = line.match(/await\s+page\.getByText\(\s*['"`]([^'"`]+)['"`][^)]*\)\.click\(/i);
-    if (clickTextMatch?.[1]) {
-      actions.push({ kind: "clickText", text: clickTextMatch[1].trim() });
-      continue;
-    }
-
-    const clickTestIdMatch = line.match(/await\s+page\.getByTestId\(\s*['"`]([^'"`]+)['"`][^)]*\)\.click\(/i);
-    if (clickTestIdMatch?.[1]) {
-      actions.push({ kind: "clickTestId", testId: clickTestIdMatch[1].trim() });
-      continue;
-    }
-
-    const clickLocatorMatch = line.match(/await\s+page\.locator\(\s*['"`]([^'"`]+)['"`][^)]*\)\.click\(/i);
-    if (clickLocatorMatch?.[1]) {
-      actions.push({ kind: "clickLocator", selector: clickLocatorMatch[1].trim() });
-      continue;
-    }
-
-    const clickLocatorNthMatch = line.match(/await\s+page\.locator\(\s*['"`]([^'"`]+)['"`][^)]*\)\.nth\(\s*(\d+)\s*\)\.click\(/i);
-    if (clickLocatorNthMatch?.[1] && clickLocatorNthMatch?.[2]) {
-      actions.push({ kind: "clickLocatorNth", selector: clickLocatorNthMatch[1].trim(), index: Number(clickLocatorNthMatch[2]) });
-      continue;
-    }
-
-    const assertTitleMatch = line.match(/await\s+expect\(page\)\.toHaveTitle\((.+)\)\s*;?/i);
-    if (assertTitleMatch?.[1]) {
-      const parsed = parseExpectedTextOrRegex(assertTitleMatch[1]);
-      if (parsed) {
-        actions.push({ kind: "assertTitle", expected: parsed.expected, isRegex: parsed.isRegex });
-      } else {
-        actions.push({ kind: "unsupported", detail: `Unsupported toHaveTitle expression: ${assertTitleMatch[1].trim()}` });
-      }
-      continue;
-    }
-
-    const assertUrlMatch = line.match(/await\s+expect\(page\)\.toHaveURL\((.+)\)\s*;?/i);
-    if (assertUrlMatch?.[1]) {
-      const parsed = parseExpectedTextOrRegex(assertUrlMatch[1]);
-      if (parsed) {
-        actions.push({ kind: "assertUrl", expected: parsed.expected, isRegex: parsed.isRegex });
-      } else {
-        actions.push({ kind: "unsupported", detail: `Unsupported toHaveURL expression: ${assertUrlMatch[1].trim()}` });
-      }
-      continue;
-    }
-
-    const assertVisibleRoleMatch = line.match(/await\s+expect\(page\.getByRole\(\s*['"`]([^'"`]+)['"`]\s*,\s*\{\s*name:\s*['"`]([^'"`]+)['"`][^}]*\}\s*\)\)\.toBeVisible\(\)\s*;?/i);
-    if (assertVisibleRoleMatch?.[1] && assertVisibleRoleMatch?.[2]) {
-      actions.push({ kind: "assertVisibleRole", role: assertVisibleRoleMatch[1].trim().toLowerCase(), name: assertVisibleRoleMatch[2].trim() });
-      continue;
-    }
-
-    const assertVisibleTextMatch = line.match(/await\s+expect\(page\.getByText\(\s*['"`]([^'"`]+)['"`][^)]*\)\)\.toBeVisible\(\)\s*;?/i);
-    if (assertVisibleTextMatch?.[1]) {
-      actions.push({ kind: "assertVisibleText", text: assertVisibleTextMatch[1].trim() });
-      continue;
-    }
-
-    const assertVisibleTestIdMatch = line.match(/await\s+expect\(page\.getByTestId\(\s*['"`]([^'"`]+)['"`][^)]*\)\)\.toBeVisible\(\)\s*;?/i);
-    if (assertVisibleTestIdMatch?.[1]) {
-      actions.push({ kind: "assertVisibleTestId", testId: assertVisibleTestIdMatch[1].trim() });
-      continue;
-    }
-
-    const assertVisibleLocatorMatch = line.match(/await\s+expect\(page\.locator\(\s*['"`]([^'"`]+)['"`][^)]*\)\)\.toBeVisible\(\)\s*;?/i);
-    if (assertVisibleLocatorMatch?.[1]) {
-      actions.push({ kind: "assertVisibleLocator", selector: assertVisibleLocatorMatch[1].trim() });
-      continue;
-    }
-
-    const assertTextRoleMatch = line.match(/await\s+expect\(page\.getByRole\(\s*['"`]([^'"`]+)['"`]\s*,\s*\{\s*name:\s*['"`]([^'"`]+)['"`][^}]*\}\s*\)\)\.toHaveText\((.+)\)\s*;?/i);
-    if (assertTextRoleMatch?.[1] && assertTextRoleMatch?.[2] && assertTextRoleMatch?.[3]) {
-      const parsed = parseExpectedTextOrRegex(assertTextRoleMatch[3]);
-      if (parsed) {
-        actions.push({ kind: "assertTextRole", role: assertTextRoleMatch[1].trim().toLowerCase(), name: assertTextRoleMatch[2].trim(), expected: parsed.expected, isRegex: parsed.isRegex });
-      } else {
-        actions.push({ kind: "unsupported", detail: `Unsupported toHaveText expression: ${assertTextRoleMatch[3].trim()}` });
-      }
-      continue;
-    }
-
-    const assertTextTextMatch = line.match(/await\s+expect\(page\.getByText\(\s*['"`]([^'"`]+)['"`][^)]*\)\)\.toHaveText\((.+)\)\s*;?/i);
-    if (assertTextTextMatch?.[1] && assertTextTextMatch?.[2]) {
-      const parsed = parseExpectedTextOrRegex(assertTextTextMatch[2]);
-      if (parsed) {
-        actions.push({ kind: "assertTextText", text: assertTextTextMatch[1].trim(), expected: parsed.expected, isRegex: parsed.isRegex });
-      } else {
-        actions.push({ kind: "unsupported", detail: `Unsupported toHaveText expression: ${assertTextTextMatch[2].trim()}` });
-      }
-      continue;
-    }
-
-    const assertTextTestIdMatch = line.match(/await\s+expect\(page\.getByTestId\(\s*['"`]([^'"`]+)['"`][^)]*\)\)\.toHaveText\((.+)\)\s*;?/i);
-    if (assertTextTestIdMatch?.[1] && assertTextTestIdMatch?.[2]) {
-      const parsed = parseExpectedTextOrRegex(assertTextTestIdMatch[2]);
-      if (parsed) {
-        actions.push({ kind: "assertTextTestId", testId: assertTextTestIdMatch[1].trim(), expected: parsed.expected, isRegex: parsed.isRegex });
-      } else {
-        actions.push({ kind: "unsupported", detail: `Unsupported toHaveText expression: ${assertTextTestIdMatch[2].trim()}` });
-      }
-      continue;
-    }
-
-    const assertTextLocatorNthMatch = line.match(/await\s+expect\(page\.locator\(\s*['"`]([^'"`]+)['"`][^)]*\)\.nth\(\s*(\d+)\s*\)\)\.toHaveText\((.+)\)\s*;?/i);
-    if (assertTextLocatorNthMatch?.[1] && assertTextLocatorNthMatch?.[2] && assertTextLocatorNthMatch?.[3]) {
-      const parsed = parseExpectedTextOrRegex(assertTextLocatorNthMatch[3]);
-      if (parsed) {
-        actions.push({ kind: "assertTextLocatorNth", selector: assertTextLocatorNthMatch[1].trim(), index: Number(assertTextLocatorNthMatch[2]), expected: parsed.expected, isRegex: parsed.isRegex });
-      } else {
-        actions.push({ kind: "unsupported", detail: `Unsupported toHaveText expression: ${assertTextLocatorNthMatch[3].trim()}` });
-      }
-      continue;
-    }
-
-    const assertTextLocatorMatch = line.match(/await\s+expect\(page\.locator\(\s*['"`]([^'"`]+)['"`][^)]*\)\)\.toHaveText\((.+)\)\s*;?/i);
-    if (assertTextLocatorMatch?.[1] && assertTextLocatorMatch?.[2]) {
-      const parsed = parseExpectedTextOrRegex(assertTextLocatorMatch[2]);
-      if (parsed) {
-        actions.push({ kind: "assertTextLocator", selector: assertTextLocatorMatch[1].trim(), expected: parsed.expected, isRegex: parsed.isRegex });
-      } else {
-        actions.push({ kind: "unsupported", detail: `Unsupported toHaveText expression: ${assertTextLocatorMatch[2].trim()}` });
-      }
-      continue;
-    }
-
-    if (/await\s+page\./i.test(line) || /await\s+expect\(/i.test(line)) {
-      actions.push({ kind: "unsupported", detail: `Unsupported action: ${line}` });
-    }
-  }
-
-  return actions;
-};
-
-const findTextboxRef = (elements: SnapshotElement[], query: string): string | null => {
-  const normalizedQuery = normalizeText(query);
-  const direct = elements.find((element) => {
-    if (element.role !== "textbox") return false;
-    return normalizeText(element.name).includes(normalizedQuery) || normalizeText(element.label ?? "").includes(normalizedQuery);
-  });
-  return direct?.ref ?? null;
-};
-
-const findClickableRefByRole = (elements: SnapshotElement[], role: string, name: string): string | null => {
+const findElementByRole = (elements: SnapshotElement[], role: string, name: string, isRegex: boolean): SnapshotElement | null => {
   const normalizedRole = normalizeText(role);
-  const normalizedName = normalizeText(name);
-  const direct = elements.find((element) => {
-    return normalizeText(element.role) === normalizedRole && normalizeText(element.name).includes(normalizedName);
-  });
-
-  return direct?.ref ?? null;
+  return elements.find((element) =>
+    normalizeText(element.role) === normalizedRole && matchesName(element.name, name, isRegex)) ?? null;
 };
 
-const findClickableRefByText = (elements: SnapshotElement[], text: string): string | null => {
-  const normalizedText = normalizeText(text);
+const findClickableRefByText = (elements: SnapshotElement[], text: string, isRegex: boolean): string | null => {
   const candidates = elements.filter((element) => ["button", "link", "tab", "menuitem"].includes(element.role));
-  const direct = candidates.find((element) => normalizeText(element.name).includes(normalizedText));
-  return direct?.ref ?? null;
+  return candidates.find((element) => matchesName(element.name, text, isRegex))?.ref ?? null;
 };
+
+const findElementByText = (elements: SnapshotElement[], text: string, isRegex: boolean): SnapshotElement | null =>
+  elements.find((element) => matchesName(element.name, text, isRegex)) ?? null;
 
 const asPlainStringResult = (value: unknown): string => {
   if (typeof value === "string") return value;
@@ -840,6 +645,7 @@ const executeWithMcp = async (
   const allErrors: string[] = [];
   const logs: string[] = [];
   let totalDuration = 0;
+  const credentialsByJob = await getCredentialsForJobs(cases.map((item) => item.generationJobId));
 
   try {
     for (let index = 0; index < cases.length; index += 1) {
@@ -847,7 +653,11 @@ const executeWithMcp = async (
       const start = Date.now();
       const filePattern = `mcp-case-${index + 1}`;
       const targetUrl = extractTargetUrlFromScript(testCase.script);
-      const parsedActions = parsePlaywrightActions(testCase.script);
+      const caseCredentials = testCase.generationJobId ? credentialsByJob.get(testCase.generationJobId) : undefined;
+      const parsedActions = parsePlaywrightActions(testCase.script, {
+        ...process.env,
+        ...credentialsToTestEnv(caseCredentials),
+      });
       const actions: ParsedAction[] = [...parsedActions];
       const caseErrors: string[] = [];
 
@@ -923,10 +733,11 @@ const executeWithMcp = async (
             const snapshotResult = await client.callTool({ name: "browser_snapshot", arguments: {} });
             const snapshotText = getToolText(snapshotResult);
             const elements = parseSnapshotElements(snapshotText);
-            const targetRef = findTextboxRef(elements, action.label);
+            const target = findFillableElement(elements, action.label, action.labelIsRegex, action.role);
+            const targetRef = target?.ref;
 
-            if (!targetRef) {
-              const message = `UNSUPPORTED_STEP: could not resolve textbox for label '${action.label}'`;
+            if (!target || !targetRef) {
+              const message = `UNSUPPORTED_STEP: could not resolve ${action.role ?? "textbox"} for label '${action.label}'`;
               caseErrors.push(message);
               mcpTrace.push({
                 timestamp: new Date().toISOString(),
@@ -943,7 +754,12 @@ const executeWithMcp = async (
               await client.callTool({
                 name: "browser_fill_form",
                 arguments: {
-                  fields: [{ target: targetRef, name: action.label, type: "textbox", value: action.value }],
+                  fields: [{
+                    target: targetRef,
+                    name: target.name || action.label,
+                    type: target.role === "combobox" ? "combobox" : "textbox",
+                    value: action.value,
+                  }],
                 },
               });
               mcpTrace.push({
@@ -1021,8 +837,8 @@ const executeWithMcp = async (
             const elements = parseSnapshotElements(snapshotText);
 
             const targetRef = action.kind === "clickRole"
-              ? findClickableRefByRole(elements, action.role, action.name)
-              : findClickableRefByText(elements, action.text);
+              ? findElementByRole(elements, action.role, action.name, action.nameIsRegex)?.ref ?? null
+              : findClickableRefByText(elements, action.text, action.textIsRegex);
 
             if (!targetRef) {
               const detail = action.kind === "clickRole"
@@ -1232,12 +1048,9 @@ const executeWithMcp = async (
                 const snapshotText = getToolText(snapshotResult);
                 const elements = parseSnapshotElements(snapshotText);
 
-                const actualText = action.kind === "assertTextRole"
-                  ? elements.find(
-                    (element) => normalizeText(element.role) === normalizeText(action.role)
-                      && normalizeText(element.name).includes(normalizeText(action.name)),
-                  )?.name ?? ""
-                  : elements.find((element) => normalizeText(element.name).includes(normalizeText(action.text)))?.name ?? "";
+                const actualText = (action.kind === "assertTextRole"
+                  ? findElementByRole(elements, action.role, action.name, action.nameIsRegex)
+                  : findElementByText(elements, action.text, action.textIsRegex))?.name ?? "";
 
                 const passed = action.isRegex
                   ? new RegExp(action.expected, "i").test(actualText)
@@ -1346,12 +1159,9 @@ const executeWithMcp = async (
                 const snapshotText = getToolText(snapshotResult);
                 const elements = parseSnapshotElements(snapshotText);
 
-                const found = action.kind === "assertVisibleRole"
-                  ? elements.some(
-                    (element) => normalizeText(element.role) === normalizeText(action.role)
-                      && normalizeText(element.name).includes(normalizeText(action.name)),
-                  )
-                  : elements.some((element) => normalizeText(element.name).includes(normalizeText(action.text)));
+                const found = (action.kind === "assertVisibleRole"
+                  ? findElementByRole(elements, action.role, action.name, action.nameIsRegex)
+                  : findElementByText(elements, action.text, action.textIsRegex)) !== null;
 
                 if (!found) {
                   const expected = action.kind === "assertVisibleRole"
@@ -1536,6 +1346,7 @@ const executeInBackground = async (
 
     const testCaseIds = cases.map((item) => item.id);
     const scripts = cases.map((item) => item.script);
+    const credentialsByJob = await getCredentialsForJobs(cases.map((item) => item.generationJobId));
 
     const { runDir, outputDir } = await buildRunnerFiles(runId, scripts);
 
@@ -1551,35 +1362,39 @@ const executeInBackground = async (
 
       // Create individual report path for this test
       const individualReportPath = path.join(runDir, `report-${i + 1}.json`);
-      const individualConfig = [
-        "import { defineConfig } from '@playwright/test';",
-        "",
-        "export default defineConfig({",
-        "  testDir: './tests',",
-        "  timeout: 60_000,",
-        "  use: {",
-        "    screenshot: 'only-on-failure',",
-        "    video: 'retain-on-failure',",
-        "    trace: 'retain-on-failure',",
-        "  },",
-        `  retries: ${env.executionRetries},`,
-        `  reporter: [['json', { outputFile: './report-${i + 1}.json' }]],`,
-        "  outputDir: './test-results',",
-        "});",
-        "",
-      ].join("\n");
+      const caseJobId = cases[i]?.generationJobId;
+      const caseCredentials = caseJobId ? credentialsByJob.get(caseJobId) : undefined;
+      // Cases that don't log in by themselves start from a session saved by a pre-login
+      // globalSetup; otherwise pages behind login redirect to the login form.
+      const preLoginUrl = shouldPreLogin(cases[i].script, caseCredentials)
+        ? extractTargetUrlFromScript(cases[i].script)
+        : null;
+      const preLoginStatePath = path.join(runDir, ".auth", `state-${i + 1}.json`);
+      if (preLoginUrl) await fs.mkdir(path.dirname(preLoginStatePath), { recursive: true });
+      const individualConfig = buildPlaywrightConfig(`report-${i + 1}.json`, Boolean(preLoginUrl));
 
       await fs.writeFile(path.join(runDir, "playwright.config.ts"), individualConfig, "utf-8");
 
       // Run this test file individually
       const artifactsBefore = new Set(await collectArtifactFiles(outputDir));
-      const runResult = await runPlaywright(runDir, filePattern);
-      allLogs.push(`[${filePattern}]\n${runResult.stdout}`);
-      if (runResult.stderr) allLogs.push(`STDERR: ${runResult.stderr}`);
+      // Each case runs in its own Playwright process, so its job's login credentials
+      // can be handed over as TEST_EMAIL / TEST_PASSWORD without touching the script.
+      const runResult = await runPlaywright(runDir, filePattern, {
+        ...credentialsToTestEnv(caseCredentials),
+        ...(preLoginUrl ? { [PRE_LOGIN_ENV.url]: preLoginUrl, [PRE_LOGIN_ENV.statePath]: preLoginStatePath } : {}),
+      });
+      // The saved session is a live login; don't leave it on disk.
+      if (preLoginUrl) await fs.rm(preLoginStatePath, { force: true });
+      allLogs.push(redactSecret(`[${filePattern}]\n${runResult.stdout}`, caseCredentials));
+      if (runResult.stderr) allLogs.push(redactSecret(`STDERR: ${runResult.stderr}`, caseCredentials));
 
       // Parse report for this test
       const rawReport = await fs.readFile(individualReportPath, "utf-8").catch(() => "{}");
-      const parsed = parsePlaywrightReport(JSON.parse(rawReport) as Parameters<typeof parsePlaywrightReport>[0]);
+      const parsedReport = parsePlaywrightReport(JSON.parse(rawReport) as Parameters<typeof parsePlaywrightReport>[0]);
+      const parsed = {
+        ...parsedReport,
+        errors: parsedReport.errors.map((error) => redactSecret(error, caseCredentials)),
+      };
 
       totalDuration += parsed.duration;
       allErrors.push(...parsed.errors);
@@ -1681,11 +1496,14 @@ export const getTestRun = async (runId: string): Promise<Record<string, unknown>
 
 export const startExecution = async (
   testCaseIds: string[],
-  options: StartExecutionOptions = {},
+  options: StartExecutionOptions,
 ): Promise<StartExecutionResult> => {
   const cases = await getTestCasesByIds(testCaseIds);
   if (!cases.length) {
     throw new Error("No valid test cases found for execution");
+  }
+  if (cases.length !== new Set(testCaseIds).size || cases.some((testCase) => testCase.ownerUid !== options.ownerUid)) {
+    throw new TestCaseAccessError();
   }
 
   const resolution = resolveExecutionEngine(options.requestedEngine);
@@ -1705,6 +1523,7 @@ export const startExecution = async (
   const projectName = String(cases[0].projectName ?? "Unknown Project");
 
   const runRef = await db.collection("testRuns").add({
+    ownerUid: options.ownerUid,
     projectId: String(cases[0].projectId ?? ""),
     projectName,
     testCaseIds,

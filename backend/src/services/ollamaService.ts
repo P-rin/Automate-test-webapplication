@@ -1,7 +1,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Ollama } from "ollama";
-import type { ChatResponse, Message, Tool } from "ollama";
+import type { ChatResponse, Message, Tool, ToolCall } from "ollama";
+import ts from "typescript";
 import {
   TEST_PLAN_CATEGORIES,
   type AcceptanceCriterion,
@@ -12,6 +13,8 @@ import {
 } from "../types.js";
 import { resolvePlaywrightMcpLaunchConfig } from "./snapshotService.js";
 import { createOllamaDebugFetch, serializeOllamaDebugError, writeOllamaDebugRecord } from "../debug/ollamaDebug.js";
+import { createIdleTimeoutFetch } from "./ollamaTimeoutFetch.js";
+import { type CoveredCase, formatCoveredCase, PlanCoverageRegistry } from "./planDedup.js";
 
 interface CopilotRequest {
   projectName: string;
@@ -85,6 +88,10 @@ export interface LlmGenerationOptions {
   plannerThink?: boolean;
   numCtx?: number;
   keepAlive?: string;
+  /** Max wait for Ollama to start responding (model load + prompt eval). Default 240000. */
+  firstChunkTimeoutMs?: number;
+  /** Max silence between streamed chunks; total generation time is unlimited. Default 120000. */
+  idleTimeoutMs?: number;
   maxPromptChars?: number;
   usePlaywrightTools?: boolean;
   ollamaClient?: Pick<Ollama, "chat">;
@@ -97,6 +104,16 @@ export interface LlmGenerationOptions {
 }
 
 const DEFAULT_LLM_MAX_PROMPT_CHARS = 14000;
+
+/**
+ * Planner rule shared by every planner prompt (Ollama and Copilot): a plan without an
+ * explicit check step leaves the script writer to guess an assertion, and the guess is
+ * often one that cannot fail or cannot pass.
+ */
+export const VERIFY_OUTCOME_RULE =
+  "VERIFY THE OUTCOME: The last `testSteps` item must check the `expectedResult`. The `expectedResult` must prove the action worked, "
+  + "not just that a control shows what was chosen (e.g. after sorting by price high to low, the first product shows the highest price; "
+  + "after adding 2 products, the cart badge shows 2). Describe the starting state only as the snapshot shows it; do not guess counts or labels.";
 
 export const truncateText = (text: string, maxLength: number, label: string): string => {
   if (text.length <= maxLength) return text;
@@ -159,6 +176,69 @@ const toJsonObject = <T>(value: string): T => {
   return parsed as T;
 };
 
+const HTML_TAG_SELECTORS = new Set([
+  "a", "article", "aside", "body", "button", "dialog", "div", "footer", "form",
+  "h1", "h2", "h3", "h4", "h5", "h6", "header", "html", "iframe", "img", "input",
+  "label", "li", "main", "nav", "ol", "option", "p", "section", "select", "span",
+  "svg", "table", "tbody", "td", "textarea", "th", "thead", "tr", "ul",
+]);
+
+const SELECTOR_ACTION_PATTERN =
+  /\bpage\.(fill|click|dblclick|check|uncheck|hover|focus|press|type|tap|selectOption|locator)\(\s*(['"`])((?:(?!\2)[^\\]|\\.)*)\2/g;
+
+/**
+ * A selector string with no CSS/engine syntax that is not a real tag name is almost
+ * always visible text or an accessible name (e.g. page.fill('Username', ...)).
+ * Playwright parses it as a tag selector (<Username>) and times out.
+ */
+const isPlainTextSelector = (selector: string): boolean => {
+  const trimmed = selector.trim();
+  if (!trimmed || trimmed.includes("${")) return false;
+  if (/[#.[\]:=>()*,~+/"'@]/.test(trimmed)) return false;
+  if (HTML_TAG_SELECTORS.has(trimmed)) return false;
+  if (/^[a-z][a-z0-9]*-[a-z0-9-]*$/.test(trimmed)) return false; // custom element tag
+  return true;
+};
+
+/**
+ * Parses the script with the TypeScript compiler (syntax only, no type checking) so that
+ * scripts Playwright cannot even load, such as unterminated regex literals or nested
+ * quotes in a test title, are rejected and retried instead of being saved.
+ */
+export const assertValidTypeScriptSyntax = (script: string): void => {
+  const result = ts.transpileModule(script, {
+    fileName: "generated.spec.ts",
+    reportDiagnostics: true,
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  });
+  const diagnostic = result.diagnostics?.find((item) => item.category === ts.DiagnosticCategory.Error);
+  if (!diagnostic) return;
+
+  const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, " ");
+  if (diagnostic.file && diagnostic.start !== undefined) {
+    const { line, character } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+    const offendingLine = script.split(/\r?\n/)[line]?.trim() ?? "";
+    throw new Error(
+      `Generated script has a TypeScript syntax error at line ${line + 1}:${character + 1}: ${message}` +
+      (offendingLine ? ` Offending line: ${offendingLine}` : ""),
+    );
+  }
+  throw new Error(`Generated script has a TypeScript syntax error: ${message}`);
+};
+
+export const assertNoPlainTextSelectors = (script: string): void => {
+  for (const match of script.matchAll(SELECTOR_ACTION_PATTERN)) {
+    const [, method, , selector] = match;
+    if (selector !== undefined && isPlainTextSelector(selector)) {
+      throw new Error(
+        `Generated script uses plain text '${selector}' as a CSS selector in page.${method}(). ` +
+        `Use a snapshot-based locator instead, e.g. page.getByRole('<role>', { name: '${selector}' }), ` +
+        `page.getByLabel('${selector}'), page.getByPlaceholder('${selector}'), or page.getByText('${selector}').`,
+      );
+    }
+  }
+};
+
 export const validateGeneratedScript = (script: string): void => {
   if (typeof script !== "string" || !script.trim()) {
     throw new Error("Generated script is empty or not a string");
@@ -184,6 +264,8 @@ export const validateGeneratedScript = (script: string): void => {
   if (/\bpage\.waitFor(?:Timeout|Selector)\s*\(|\bpage\.\$\$?\s*\(/.test(trimmedScript)) {
     throw new Error("Generated script must not use page.waitForTimeout(), page.waitForSelector(), page.$(), or page.$$().");
   }
+
+  assertNoPlainTextSelectors(trimmedScript);
 
   const stack: string[] = [];
   let inSingleQuote = false;
@@ -282,6 +364,8 @@ export const validateGeneratedScript = (script: string): void => {
   if (inSingleQuote || inDoubleQuote || inBacktick || inLineComment || inBlockComment || stack.length > 0) {
     throw new Error("Generated script contains unbalanced syntax or unfinished code blocks.");
   }
+
+  assertValidTypeScriptSyntax(script);
 };
 
 const isValidTestPlan = (value: unknown): value is TestPlan => {
@@ -298,7 +382,9 @@ const isValidTestPlan = (value: unknown): value is TestPlan => {
     (plan.requirementIds === undefined ||
       (Array.isArray(plan.requirementIds) && plan.requirementIds.every(id => typeof id === "string"))) &&
     (plan.category === undefined ||
-      (typeof plan.category === "string" && TEST_PLAN_CATEGORIES.includes(plan.category as TestPlanCategory)))
+      (typeof plan.category === "string" && TEST_PLAN_CATEGORIES.includes(plan.category as TestPlanCategory))) &&
+    (plan.targetElement === undefined || typeof plan.targetElement === "string") &&
+    (plan.inputVariant === undefined || typeof plan.inputVariant === "string")
   );
 };
 
@@ -345,6 +431,7 @@ const buildPlannerPrompt = (payload: CopilotRequest, maxPromptChars: number): st
     "8. TEST DESIGN: Apply equivalence partitioning and boundary value analysis. For inputs, include relevant negative and validation cases such as zero, negative values, values above stock, and empty required fields.",
     "9. THAI TEXT: Write `title`, `description`, every `testSteps` item, and `expectedResult` in Thai. Keep UI labels, element names, and URLs exactly as they appear in the accessibility snapshot.",
     "10. OBSERVABLE RESULTS: Every `expectedResult` must be observable and verifiable, such as visible text, URL, element count, or enabled/disabled state. Avoid vague statements such as \"works correctly\".",
+    `11. ${VERIFY_OUTCOME_RULE}`,
     "",
     "[OUTPUT FORMAT]",
     "Output ONLY a valid JSON object (not an array).",
@@ -375,6 +462,12 @@ const buildPlannerPrompt = (payload: CopilotRequest, maxPromptChars: number): st
   ].join("\n");
 };
 
+/** The URL the snapshot was captured at (Playwright MCP writes "- Page URL: ..."). */
+export const snapshotPageUrl = (snapshot: string | undefined): string => {
+  const url = snapshot?.match(/Page URL:\s*(\S+)/i)?.[1] ?? "";
+  return /^https?:\/\//i.test(url) ? url : "";
+};
+
 export const buildAgentGenerationPrompt = (payload: CopilotRequest, plannedCase: TestPlan): string =>
   buildGeneratorPrompt(payload, plannedCase, 14000);
 
@@ -387,15 +480,28 @@ export const buildGeneratorPrompt = (payload: CopilotRequest, plannedCase: TestP
     "[ABSOLUTE SCRIPT RULES]",
     "1. Import test and expect from '@playwright/test' in this file.",
     "2. Put every browser action inside test('<name matching the actual scenario>', async ({ page }) => { ... }). Use only this fixture page, or locators obtained from it.",
-    "3. Navigate with await page.goto(...). Fill fields with await page.fill(selector, value) or locator.fill(value), and click with await page.click(selector) or locator.click().",
+    "3. Navigate with await page.goto(...). Interact ONLY through locators built from the snapshot, then call .fill(value) or .click() on the locator. Map each snapshot line to getByRole with the SAME role and name:",
+    "   snapshot `textbox \"Username\"` -> await page.getByRole('textbox', { name: 'Username' }).fill(...)",
+    "   snapshot `button \"Login\"` -> await page.getByRole('button', { name: 'Login' }).click()",
+    "   A plain label or visible text is NOT a CSS selector: page.fill('Username', ...), page.click('Login'), and page.locator('Login') are WRONG and will time out.",
     "4. Never output an identifier beginning with browser_ (including any MCP tool name). Never use ref= or snapshot reference IDs in selectors; those references do not exist in the DOM.",
-    "5. Prefer page.getByRole(), page.getByLabel(), page.getByPlaceholder(), and page.getByText() locators. Use web-first expect(...) assertions.",
+    "5. Use page.getByRole(), page.getByLabel(), page.getByPlaceholder(), or page.getByText() locators. Use the exact role shown in the snapshot; never assume an element is a heading (or any other role) unless the snapshot says so. For plain text that has no role in the snapshot, use page.getByText(). Use web-first expect(...) assertions.",
     "6. Do not call any function that is not imported or defined in this same file. Keep the test self-contained and use Playwright Test APIs.",
-    "7. If login is required, read credentials only from process.env.TEST_EMAIL and process.env.TEST_PASSWORD. Never hardcode an email or password.",
+    "7. If login is required, read credentials only from process.env.TEST_EMAIL and process.env.TEST_PASSWORD, written as .fill(process.env.TEST_EMAIL ?? '') and .fill(process.env.TEST_PASSWORD ?? ''). Never hardcode an email or password.",
     "8. Verify each important step with Playwright expect assertions such as toBeVisible(), toHaveURL(), toHaveText(), or toHaveCount(). Do not use toHaveTitle() to identify a page unless the relevant pages are known to have different titles.",
-    "9. Generate exactly one independent test for the assigned scenario, starting at the target URL. Include a meaningful assertion; do not combine unrelated positive and negative flows.",
+    "9. Generate exactly one independent test for the assigned scenario, starting at the Start URL given below (the page where the snapshot was captured), not the site's home page. If that page sits behind a login, the browser is already logged in when the test starts: do not log in again unless the scenario itself is about logging in. Include a meaningful assertion; do not combine unrelated positive and negative flows. Do not use loops or arrays to create several test() calls.",
     "10. Never use page.waitForTimeout(), page.$(), page.$$(), or page.waitForSelector(). Prefer the locator APIs above and web-first expect(...) assertions.",
-    "11. Use only element names and labels that appear in the supplied accessibility snapshot. Do not invent selectors, element names, or labels.",
+    "11. Use only element names, labels, and text that appear in the supplied accessibility snapshot, and only attribute selectors listed in its `### Test IDs` section, written exactly as listed (e.g. [data-test=\"inventory-item\"], never inventory_item). Do not invent selectors, element names, labels, or text.",
+    "12. The script must compile. Write the test title as plain words with no quote characters inside it, e.g. test('Login with valid credentials shows the product list', ...). Never nest ' inside a '...' string; if a value contains ', wrap it in \" instead.",
+    "13. To check a URL, prefer a full string: await expect(page).toHaveURL('https://example.com/inventory.html'). If you use a regex, it must be a simple valid literal such as /inventory/. Never write /\\/ or any regex whose closing slash is escaped.",
+    "14. For a negative or validation scenario, assert the visible error message or element that proves the failure (e.g. await expect(page.getByText('Invalid username or password')).toBeVisible()). A URL check alone is not a meaningful assertion, because the URL often does not change when an action fails. Only assert messages, links, or elements that the specification or snapshot confirms exist; if the exact message is unknown, assert a stable fragment of it.",
+    "15. A snapshot `combobox` that has `option` children is a native <select> dropdown. Its options open in a browser popup that is not part of the page, so clicking an option always times out. Never click the combobox or an option to choose a value; call selectOption on the combobox locator with the option's visible text:",
+    "   snapshot `combobox \"Sort products\"` with `option \"Price (high to low)\"` -> await page.getByRole('combobox', { name: 'Sort products' }).selectOption({ label: 'Price (high to low)' })",
+    "   page.getByRole('option', ...).click() is WRONG for these options. Only click option elements when they are NOT children of a combobox (e.g. a custom listbox).",
+    "   After selectOption, assert the RESULT of the choice (e.g. the order of items or the first item's value), not the option text: getByText('<option text>') also matches the hidden <option> element and fails in strict mode.",
+    "16. When the snapshot repeats the same role and name (e.g. one `button \"Add to cart\"` per product), never use that locator alone, and never click an item's title to reach its button. Scope the locator to the item that contains it, filtering by text shown in that item:",
+    "   await page.locator('<item container>').filter({ hasText: 'Sauce Labs Backpack' }).getByRole('button', { name: 'Add to cart' }).click()",
+    "   For the item container, prefer a repeated entry from the `### Test IDs` section (one shown as x<count>, matching the number of items), else an article, a listitem, or a row; if none fits, use .nth(index) in the snapshot's order.",
     "",
     "[OUTPUT FORMAT]",
     "Output ONLY raw JSON with exact keys: id, title, script. Do not wrap the JSON in markdown, code fences, or additional text.",
@@ -403,10 +509,10 @@ export const buildGeneratorPrompt = (payload: CopilotRequest, plannedCase: TestP
     "The script must follow this structure:",
     "import { test, expect } from '@playwright/test';",
     "",
-    "test('<scenario matching the behavior under test>', async ({ page }) => {",
-    "  await page.goto('<target URL>');",
-    "  // Perform the assigned steps using page or its locators.",
-    "  await expect(page.getByRole('heading', { name: /example/i })).toBeVisible();",
+    "test('<plain-words scenario title without quotes>', async ({ page }) => {",
+    "  await page.goto('<Start URL>');",
+    "  // Perform the assigned steps with locators that match the snapshot roles and names.",
+    "  await expect(page.getByText('<text proving the expected result>')).toBeVisible();",
     "});",
     "",
     "Return a complete, executable script. Do not include placeholder actions or call names from the snapshot.",
@@ -438,6 +544,7 @@ export const buildGeneratorPrompt = (payload: CopilotRequest, plannedCase: TestP
     instructions,
     "",
     `Target URL: ${payload.targetUrl}`,
+    `Start URL: ${snapshotPageUrl(payload.accessibilitySnapshot) || payload.targetUrl}`,
     `Project: ${payload.projectName}`,
     "",
     "[Assigned Test Plan Object]",
@@ -540,8 +647,13 @@ const NEXT_TEST_PLAN_RESPONSE_FORMAT = {
     expectedResult: { type: "string" },
     requirementIds: { type: "array", items: { type: "string" } },
     category: { type: "string", enum: [...TEST_PLAN_CATEGORIES] },
+    targetElement: { type: "string" },
+    inputVariant: { type: "string" },
   },
-  required: ["status", "id", "title", "description", "type", "testSteps", "expectedResult", "requirementIds", "category"],
+  required: [
+    "status", "id", "title", "description", "type", "testSteps", "expectedResult", "requirementIds", "category",
+    "targetElement", "inputVariant",
+  ],
   additionalProperties: false,
 };
 
@@ -588,9 +700,12 @@ const callOllamaModel = async (
     for (let turn = 0; turn < MAX_MODEL_TURNS; turn += 1) {
       let response: ChatResponse;
       try {
-        response = await ollama.chat({
+        response = await collectChatResponse(await ollama.chat({
           model,
-          ...(stage === "planner" && options.plannerThink === true ? { think: true } : {}),
+          stream: true,
+          // Always send `think` explicitly: thinking models (e.g. qwen3.5) think by default when it is
+          // omitted, which can exhaust num_predict on reasoning and return empty content.
+          think: stage === "planner" && options.plannerThink === true,
           messages,
           tools,
           format: responseFormat,
@@ -601,7 +716,7 @@ const callOllamaModel = async (
             num_ctx: options.numCtx ?? 8192,
             num_predict: 4096,
           },
-        });
+        }));
       } catch (error) {
         if (options.debugContext) {
           await writeOllamaDebugRecord(options.debugContext, {
@@ -662,6 +777,41 @@ const callOllamaModel = async (
   }
 };
 
+const DEFAULT_FIRST_CHUNK_TIMEOUT_MS = 240_000;
+const DEFAULT_IDLE_TIMEOUT_MS = 120_000;
+
+const isAsyncIterable = (value: unknown): value is AsyncIterable<ChatResponse> =>
+  value != null && typeof (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function";
+
+/** Merges streamed chat chunks into a single ChatResponse; passes non-streamed responses through. */
+export const collectChatResponse = async (result: unknown): Promise<ChatResponse> => {
+  if (!isAsyncIterable(result)) return result as ChatResponse;
+
+  let last: ChatResponse | undefined;
+  let role = "assistant";
+  let content = "";
+  let thinking = "";
+  const toolCalls: ToolCall[] = [];
+  for await (const chunk of result) {
+    last = chunk;
+    if (chunk.message?.role) role = chunk.message.role;
+    content += chunk.message?.content ?? "";
+    thinking += chunk.message?.thinking ?? "";
+    if (chunk.message?.tool_calls?.length) toolCalls.push(...chunk.message.tool_calls);
+  }
+  if (!last) throw new Error("Ollama stream ended without returning any data");
+
+  return {
+    ...last,
+    message: {
+      role,
+      content,
+      ...(thinking ? { thinking } : {}),
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    },
+  };
+};
+
 export const createRunContext = (options: LlmGenerationOptions, stage: "planner" | "script") => {
   const model = stage === "planner"
     ? options.plannerModel ?? options.ollamaModel ?? "qwen3.5:9b"
@@ -670,9 +820,13 @@ export const createRunContext = (options: LlmGenerationOptions, stage: "planner"
     ? { ...options.debugContext, stage, model }
     : undefined;
   const runOptions = { ...options, debugContext };
+  const timeoutFetch = createIdleTimeoutFetch({
+    firstChunkTimeoutMs: options.firstChunkTimeoutMs ?? DEFAULT_FIRST_CHUNK_TIMEOUT_MS,
+    idleTimeoutMs: options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
+  });
   const client = options.ollamaClient ?? new Ollama({
     host: options.ollamaHost ?? "http://localhost:11434",
-    ...(debugContext ? { fetch: createOllamaDebugFetch(debugContext) } : {}),
+    fetch: debugContext ? createOllamaDebugFetch(debugContext, timeoutFetch) : timeoutFetch,
   });
 
   return (prompt: string, systemInstruction: string, responseFormat: object): Promise<string> =>
@@ -742,7 +896,7 @@ export const renderCriteriaForPrompt = (
 export const generateNextTestPlan = async (
   payload: CopilotRequest,
   snapshot: string,
-  existingCases: Pick<TestPlan, "title" | "description">[],
+  existingCases: readonly CoveredCase[],
   options: LlmGenerationOptions = {},
   acceptanceCriteria?: AcceptanceCriterion[],
   coveredAcIds: ReadonlySet<string> = new Set(),
@@ -755,9 +909,13 @@ export const generateNextTestPlan = async (
     "Plan one independent test for this page/state.",
     "Use only requirement/snapshot behavior; avoid duplicates and speculation.",
     "Return one distinct scenario not already covered (status=case), or status=done if none remain; separate positive and negative cases.",
+    "[Already Covered Cases] spans every page of this job, as 'title [targetElement | inputVariant]'. Same element + same input/start state = duplicate, however worded.",
+    "Header/nav/footer controls repeat on every page: skip them if already covered. Test a toggle's both directions in one case.",
+    "targetElement: exact snapshot label of the main element under test. inputVariant: short English input value or start state (e.g. 'quantity=0'), '' if none.",
     "Apply equivalence partitioning, boundary-value analysis, and negative input validation (e.g. quantity 0/negative/above stock, empty required fields).",
     "Write title, description, testSteps, expectedResult in Thai; preserve snapshot UI labels, element names, and URLs.",
     "Expected results must be observable/verifiable (visible text, URL, element count, enabled/disabled state), not vague ('works correctly').",
+    VERIFY_OUTCOME_RULE,
     "Start with login if required. For status=done, use empty text fields, type=UI, empty testSteps, requirementIds=[], category=exploratory. Return schema JSON only.",
     ...(allowMutatingTests ? [] : [
       "Do not plan cases that complete a purchase, payment, deletion, or account change; stop at the final confirmation screen and assert it.",
@@ -772,7 +930,7 @@ export const generateNextTestPlan = async (
   const contextBudget = Math.max(0, maxPromptChars - instructions.length - 256);
   const specification = payload.specification.trim() || "No requirement specification was provided.";
   const maxKnownCasesChars = Math.floor(contextBudget * (hasCriteria ? 0.25 : 0.35));
-  const knownCaseLines = existingCases.map((item) => `${item.title}: ${item.description}`);
+  const knownCaseLines = existingCases.map(formatCoveredCase);
   const recentKnownCases: string[] = [];
   let recentKnownCasesLength = 0;
   for (const line of knownCaseLines.reverse()) {
@@ -823,8 +981,10 @@ export type IncrementalPlanningResult =
   | { status: "complete"; planCount: number }
   | { status: "incomplete"; planCount: number; stopReason: string };
 
-const normalizePlanTitle = (title: string): string => title.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-
+/**
+ * Plans cases for one snapshot until the model reports done. Pass one job-wide `coverage` registry
+ * for every snapshot of a job so the planner sees, and is checked against, cases from earlier pages.
+ */
 export const processSnapshotTestPlans = async (
   payload: CopilotRequest,
   snapshot: string,
@@ -833,6 +993,7 @@ export const processSnapshotTestPlans = async (
   acceptanceCriteriaOrKnownAcIds: AcceptanceCriterion[] | ReadonlySet<string> = [],
   coveredAcIds: Set<string> = new Set(),
   allowMutatingTests = true,
+  coverage: PlanCoverageRegistry = new PlanCoverageRegistry(),
 ): Promise<IncrementalPlanningResult> => {
   const acceptanceCriteria = Array.isArray(acceptanceCriteriaOrKnownAcIds)
     ? acceptanceCriteriaOrKnownAcIds
@@ -840,42 +1001,41 @@ export const processSnapshotTestPlans = async (
   const knownAcIds = Array.isArray(acceptanceCriteriaOrKnownAcIds)
     ? new Set(acceptanceCriteria.map((criterion) => criterion.id))
     : acceptanceCriteriaOrKnownAcIds as ReadonlySet<string>;
-  const knownCases: Pick<TestPlan, "title" | "description">[] = [];
-  const knownTitles = new Set<string>();
   let planCount = 0;
   let repeatedCaseCount = 0;
   const maxRepeatedCases = 5;
 
   while (true) {
-    const next = await generateNextTestPlan(
-      payload,
-      snapshot,
-      knownCases,
-      options,
-      acceptanceCriteria,
-      coveredAcIds,
-      undefined,
-      allowMutatingTests,
-    );
+    let next: Awaited<ReturnType<typeof generateNextTestPlan>>;
+    try {
+      next = await generateNextTestPlan(
+        payload,
+        snapshot,
+        coverage.coveredCases(),
+        options,
+        acceptanceCriteria,
+        coveredAcIds,
+        undefined,
+        allowMutatingTests,
+      );
+    } catch (error) {
+      // One failed/stuck model call should not abort the whole job; let the caller move on to the next snapshot.
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        status: "incomplete",
+        planCount,
+        stopReason: `Planner request failed: ${message}`,
+      };
+    }
     if (next.status === "done") return { status: "complete", planCount };
 
     const plan = sanitizePlanTraceability(next.plan, knownAcIds);
-    const titleKey = normalizePlanTitle(plan.title);
-    if (!titleKey || knownTitles.has(titleKey)) {
-      repeatedCaseCount += 1;
-      knownCases.push({ title: plan.title, description: plan.description });
-      if (repeatedCaseCount >= maxRepeatedCases) {
-        return {
-          status: "incomplete",
-          planCount,
-          stopReason: "Planner repeated already-covered cases and could not make coverage progress",
-        };
-      }
-      continue;
-    }
-
-    const accepted = await persistCase(plan, planCount + 1);
-    knownCases.push({ title: plan.title, description: plan.description });
+    // A case that verifies a not-yet-covered AC is kept unless its title is identical, so traceability is never lost.
+    const coversNewAc = (plan.requirementIds ?? []).some((id) => !coveredAcIds.has(id));
+    // Rejected duplicates are not added to the prompt list; the registry moves the matched case to the
+    // most-recent end instead, so the case the model keeps repeating stays visible inside the prompt budget.
+    const duplicateOf = coverage.findDuplicate(plan, { titleOnly: coversNewAc });
+    const accepted = duplicateOf === undefined && await persistCase(plan, planCount + 1);
     if (!accepted) {
       repeatedCaseCount += 1;
       if (repeatedCaseCount >= maxRepeatedCases) {
@@ -888,7 +1048,7 @@ export const processSnapshotTestPlans = async (
       continue;
     }
 
-    knownTitles.add(titleKey);
+    coverage.add(plan);
     for (const id of plan.requirementIds ?? []) coveredAcIds.add(id);
     planCount += 1;
     repeatedCaseCount = 0;

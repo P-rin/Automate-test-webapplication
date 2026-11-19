@@ -68,3 +68,13 @@ test("counts a retry-passed test as flaky even when the JSON reporter omits outc
   assert.equal(result.skippedCount, 0);
   assert.deepEqual(result.errors, ["timeout stack"]);
 });
+
+test("parsePlaywrightReport keeps run-level errors such as a failed globalSetup", () => {
+  const parsed = parsePlaywrightReport({
+    suites: [],
+    errors: [{ message: "Error: Pre-login: login form is still shown after submitting." }],
+  });
+
+  assert.equal(parsed.passCount, 0);
+  assert.deepEqual(parsed.errors, ["Error: Pre-login: login form is still shown after submitting."]);
+});

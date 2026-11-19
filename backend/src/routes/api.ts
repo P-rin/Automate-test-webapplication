@@ -32,8 +32,30 @@ import {
 import { getTestRun, startExecution } from "../services/executionService.js";
 import { fetchAccessibilitySnapshot } from "../services/snapshotService.js";
 import { readSpecFiles } from "../services/specReader.js";
-import { artifactToSavePayload, getTestCasesByIds, saveGeneratedTestCase, updateTestCaseScript } from "../services/testCaseService.js";
+import {
+  artifactToSavePayload,
+  assertOwnsTestCases,
+  deleteTestCases,
+  getTestCasesByIds,
+  saveGeneratedTestCase,
+  TestCaseAccessError,
+  TestCaseDeleteError,
+  updateTestCaseScript,
+} from "../services/testCaseService.js";
+import { touchProject } from "../services/projectService.js";
 import { isValidTargetUrl } from "../utils/project.js";
+import { normalizeLoginCredentials, type LoginCredentials } from "../services/credentialService.js";
+
+/** Reads optional website login credentials from a job-creation form body. */
+const readLoginCredentials = (
+  body: Record<string, unknown>,
+): { loginCredentials: LoginCredentials | null } | { error: string } => {
+  try {
+    return { loginCredentials: normalizeLoginCredentials(body.loginUsername, body.loginPassword) };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Invalid login credentials" };
+  }
+};
 import { readJobFromCache } from "../services/jobProgressCache.js";
 import { computeCoverage, renderCoverageMarkdown } from "../services/coverageService.js";
 import { TEST_PLAN_CATEGORIES, type AcceptanceCriterion, type RequirementUnit } from "../types.js";
@@ -333,9 +355,11 @@ apiRouter.get("/v2/generation-failures", requireFirebaseAuth, async (_req, res) 
   }
 });
 
-apiRouter.get("/v2/generation-jobs", requireFirebaseAuth, async (_req, res) => {
+apiRouter.get("/v2/generation-jobs", requireFirebaseAuth, async (req, res) => {
   try {
-    const jobs = await listGenerationJobs(getFirebaseUid(res));
+    const projectId = typeof req.query.projectId === "string" && req.query.projectId ? req.query.projectId : undefined;
+    const jobId = typeof req.query.jobId === "string" && req.query.jobId ? req.query.jobId : undefined;
+    const jobs = await listGenerationJobs(getFirebaseUid(res), { projectId, jobId });
     return res.json({ jobs });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -596,6 +620,8 @@ apiRouter.post("/generate-job", requireFirebaseAuth, upload.array("files"), asyn
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
     }
+    const credentialsResult = readLoginCredentials(req.body);
+    if ("error" in credentialsResult) return res.status(400).json({ error: credentialsResult.error });
 
     const files = (req.files ?? []) as Express.Multer.File[];
     const { combinedText } = readSpecFiles(files);
@@ -606,6 +632,7 @@ apiRouter.post("/generate-job", requireFirebaseAuth, upload.array("files"), asyn
       targetUrl,
       specification: effectiveSpecification,
       allowMutatingTests,
+      loginCredentials: credentialsResult.loginCredentials,
       ownerUid: getFirebaseUid(res),
     });
 
@@ -634,6 +661,8 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
     }
+    const credentialsResult = readLoginCredentials(req.body);
+    if ("error" in credentialsResult) return res.status(400).json({ error: credentialsResult.error });
 
     const files = (req.files ?? []) as Express.Multer.File[];
     const { combinedText, fileNames } = readSpecFiles(files);
@@ -645,6 +674,7 @@ apiRouter.post("/v2/generate-job", requireFirebaseAuth, upload.array("files"), a
       specification: effectiveSpecification,
       allowMutatingTests,
       humanReview,
+      loginCredentials: credentialsResult.loginCredentials,
       ownerUid: getFirebaseUid(res),
     });
 
@@ -685,6 +715,8 @@ apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), asy
     if (!isValidTargetUrl(targetUrl)) {
       return res.status(400).json({ error: "Only valid http/https URLs are allowed" });
     }
+    const credentialsResult = readLoginCredentials(req.body);
+    if ("error" in credentialsResult) return res.status(400).json({ error: credentialsResult.error });
 
     const files = (req.files ?? []) as Express.Multer.File[];
     const { combinedText, fileNames } = readSpecFiles(files);
@@ -695,6 +727,7 @@ apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), asy
       targetUrl,
       specification: effectiveSpecification,
       allowMutatingTests,
+      loginCredentials: credentialsResult.loginCredentials,
       ownerUid: getFirebaseUid(res),
     });
 
@@ -724,10 +757,12 @@ apiRouter.post("/generate-test", requireFirebaseAuth, upload.array("files"), asy
   }
 });
 
-apiRouter.post("/save-test", async (req, res) => {
+apiRouter.post("/save-test", requireFirebaseAuth, async (req, res) => {
   try {
     const payload = saveSchema.parse(req.body);
-    const id = await saveGeneratedTestCase(payload);
+    const ownerUid = getFirebaseUid(res);
+    const id = await saveGeneratedTestCase({ ...payload, ownerUid });
+    await touchProject(ownerUid, payload.projectName, payload.url);
     return res.status(201).json({ id });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -738,24 +773,28 @@ apiRouter.post("/save-test", async (req, res) => {
   }
 });
 
-apiRouter.post("/execute", async (req, res) => {
+apiRouter.post("/execute", requireFirebaseAuth, async (req, res) => {
   try {
     const payload = executeSchema.parse(req.body);
-    const result = await startExecution(payload.testCaseIds);
+    const result = await startExecution(payload.testCaseIds, { ownerUid: getFirebaseUid(res) });
     return res.status(202).json(result);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
+    }
+    if (error instanceof TestCaseAccessError) {
+      return res.status(404).json({ error: error.message });
     }
     const message = error instanceof Error ? error.message : "Unknown error";
     return res.status(500).json({ error: message });
   }
 });
 
-apiRouter.post("/v2/execute", async (req, res) => {
+apiRouter.post("/v2/execute", requireFirebaseAuth, async (req, res) => {
   try {
     const payload = executeV2Schema.parse(req.body);
     const result = await startExecution(payload.testCaseIds, {
+      ownerUid: getFirebaseUid(res),
       requestedEngine: payload.engine,
     });
     return res.status(202).json({
@@ -769,14 +808,18 @@ apiRouter.post("/v2/execute", async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
     }
+    if (error instanceof TestCaseAccessError) {
+      return res.status(404).json({ error: error.message });
+    }
     const message = error instanceof Error ? error.message : "Unknown error";
     return res.status(500).json({ error: message });
   }
 });
 
-apiRouter.get("/v2/test-runs/:runId", async (req, res) => {
+apiRouter.get("/v2/test-runs/:runId", requireFirebaseAuth, async (req, res) => {
   try {
     const run = await getTestRun(req.params.runId);
+    if (run.ownerUid !== getFirebaseUid(res)) throw new Error("Test run not found");
     return res.json({
       id: run.id,
       status: run.status,
@@ -807,7 +850,7 @@ apiRouter.get("/v2/test-runs/:runId", async (req, res) => {
   }
 });
 
-apiRouter.post("/save-generated", async (req, res) => {
+apiRouter.post("/save-generated", requireFirebaseAuth, async (req, res) => {
   try {
     const parsed = z
       .object({
@@ -822,8 +865,10 @@ apiRouter.post("/save-generated", async (req, res) => {
       })
       .parse(req.body);
 
-    const payload = artifactToSavePayload(parsed.generated, parsed.projectName, parsed.url);
+    const ownerUid = getFirebaseUid(res);
+    const payload = artifactToSavePayload(parsed.generated, parsed.projectName, parsed.url, ownerUid);
     const id = await saveGeneratedTestCase(payload);
+    await touchProject(ownerUid, parsed.projectName, parsed.url);
     return res.status(201).json({ id });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -834,14 +879,39 @@ apiRouter.post("/save-generated", async (req, res) => {
   }
 });
 
-apiRouter.patch("/test-case-script", async (req, res) => {
+const deleteTestCasesSchema = z.object({
+  testCaseIds: z.array(z.string().min(1)).min(1).max(200),
+});
+
+apiRouter.post("/test-cases/delete", requireFirebaseAuth, async (req, res) => {
+  try {
+    const payload = deleteTestCasesSchema.parse(req.body);
+    const result = await deleteTestCases(payload.testCaseIds, getFirebaseUid(res));
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
+    }
+    if (error instanceof TestCaseDeleteError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    const mapped = toClientError(error);
+    return res.status(mapped.status).json({ error: mapped.message });
+  }
+});
+
+apiRouter.patch("/test-case-script", requireFirebaseAuth, async (req, res) => {
   try {
     const payload = updateScriptSchema.parse(req.body);
+    await assertOwnsTestCases([payload.testCaseId], getFirebaseUid(res));
     await updateTestCaseScript(payload.testCaseId, payload.script);
     return res.status(204).send();
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: "Invalid payload", details: error.flatten() });
+    }
+    if (error instanceof TestCaseAccessError) {
+      return res.status(404).json({ error: error.message });
     }
     const mapped = toClientError(error);
     return res.status(mapped.status).json({ error: mapped.message });

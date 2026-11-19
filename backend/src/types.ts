@@ -42,6 +42,10 @@ export interface TestPlan {
   /** AC IDs (e.g. "AC-003") this plan verifies; [] for exploratory cases. */
   requirementIds?: string[];
   category?: TestPlanCategory;
+  /** Exact UI label of the main element under test; used for semantic de-duplication across pages. */
+  targetElement?: string;
+  /** Input value(s) or start state being exercised (e.g. "quantity=0", "light -> dark"); "" when none. */
+  inputVariant?: string;
 }
 
 export interface RequirementUnit {

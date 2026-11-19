@@ -1,35 +1,52 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { collection, getCountFromServer, onSnapshot, query, orderBy, limit, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import type { TestRun, TestCase } from '../types';
+import { useAuth } from '../context/AuthContext';
+import type { TestRun } from '../types';
 
 export default function DashboardPage() {
   const [testRuns, setTestRuns] = useState<TestRun[]>([]);
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const { user } = useAuth();
+  // Totals come from count() aggregations (1 read per 1,000 documents) instead of
+  // downloading every test case.
+  const [totals, setTotals] = useState({ projects: 0, testCases: 0 });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!user) return;
+    let active = true;
+    Promise.all([
+      getCountFromServer(query(collection(db, 'projects'), where('ownerUid', '==', user.uid))),
+      getCountFromServer(query(collection(db, 'testCases'), where('ownerUid', '==', user.uid))),
+    ])
+      .then(([projects, testCases]) => {
+        if (active) setTotals({ projects: projects.data().count, testCases: testCases.data().count });
+      })
+      .catch(error => console.error('Could not load dashboard totals:', error));
+    return () => { active = false; };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    // Needs the composite index testRuns(ownerUid ASC, startedAt DESC); see firestore.indexes.json.
     const unsubRuns = onSnapshot(
-      query(collection(db, 'testRuns'), orderBy('startedAt', 'desc'), limit(10)),
+      query(collection(db, 'testRuns'), where('ownerUid', '==', user.uid), orderBy('startedAt', 'desc'), limit(10)),
       (snapshot) => {
         setTestRuns(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TestRun)));
         setLoading(false);
-      }
+      },
+      (error) => {
+        console.error('Could not load recent test runs:', error);
+        setLoading(false);
+      },
     );
 
-    const unsubCases = onSnapshot(collection(db, 'testCases'), (snapshot) => {
-      setTestCases(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TestCase)));
-    });
+    return () => unsubRuns();
+  }, [user]);
 
-    return () => {
-      unsubRuns();
-      unsubCases();
-    };
-  }, []);
-
-  const totalProjects = [...new Set(testCases.map(tc => tc.projectId))].length;
-  const totalTestCases = testCases.length;
+  const totalProjects = totals.projects;
+  const totalTestCases = totals.testCases;
   const totalRuns = testRuns.length;
   const successRate = totalRuns > 0
     ? Math.round((testRuns.reduce((acc, r) => acc + r.passCount, 0) /

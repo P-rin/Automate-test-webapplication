@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
 import { Link, useSearchParams } from 'react-router-dom';
-import { db } from '../lib/firebase';
+import { useProjectTestCases } from '../lib/testCasesStore';
+import { useProjectPages } from '../lib/projectPages';
 import type { TestCase, Project } from '../types';
 import { useAuth } from '../context/AuthContext';
 
@@ -105,17 +105,32 @@ const coverageStates: CoverageState[] = [
   'manual',
 ];
 
+type GenerationJobSummary = Omit<GenerationJob, 'cases'>;
+
+const fetchGenerationJobSummaries = async (
+  token: string,
+  filter: { projectId: string } | { jobId: string },
+): Promise<GenerationJobSummary[]> => {
+  const response = await fetch(`${BACKEND_URL}/api/v2/generation-jobs?${new URLSearchParams(filter)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json() as { jobs?: GenerationJobSummary[]; error?: string };
+  if (!response.ok) throw new Error(data.error || 'โหลดรายการ Test case ไม่สำเร็จ');
+  return data.jobs ?? [];
+};
+
+/**
+ * Loads one project's jobs. Case details are cached per job (casesByJob) across
+ * projects, and only re-fetched while a job is active or once right after it finishes.
+ */
 const fetchGenerationJobs = async (
   token: string,
+  projectId: string,
   caseCursors: Map<string, string>,
   casesByJob: Map<string, GenerationJobCase[]>,
   wasJobActive: Map<string, boolean>,
 ): Promise<GenerationJob[]> => {
-  const response = await fetch(`${BACKEND_URL}/api/v2/generation-jobs`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = await response.json() as { jobs?: Omit<GenerationJob, 'cases'>[]; error?: string };
-  if (!response.ok) throw new Error(data.error || 'โหลดรายการ Test case ไม่สำเร็จ');
+  const data = { jobs: await fetchGenerationJobSummaries(token, { projectId }) };
 
   const jobs = await Promise.all((data.jobs ?? []).map(async job => {
     const cachedCases = casesByJob.get(job.id);
@@ -145,17 +160,7 @@ const fetchGenerationJobs = async (
     return { ...job, cases };
   }));
 
-  const activeJobIds = new Set(jobs.map(job => job.id));
-  caseCursors.forEach((_, jobId) => {
-    if (!activeJobIds.has(jobId)) {
-      caseCursors.delete(jobId);
-      wasJobActive.delete(jobId);
-    }
-  });
-  casesByJob.forEach((_, jobId) => {
-    if (!activeJobIds.has(jobId)) casesByJob.delete(jobId);
-  });
-  return jobs;
+  return jobs.sort((left, right) => toMillis(right.createdAt) - toMillis(left.createdAt));
 };
 
 const toMillis = (value: unknown): number => {
@@ -186,9 +191,14 @@ export default function TestCasesPage() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const requestedJobId = searchParams.get('jobId');
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const projectPages = useProjectPages(user?.uid);
+  // A project opened from a link (?jobId=) may not be on the loaded page of projects;
+  // it is shown pinned above the list.
+  const [linkedProject, setLinkedProject] = useState<Project | null>(null);
+  // Jobs of the open project. Each project's jobs are cached with the refresh key they
+  // were loaded at, so switching back to a project doesn't call the backend again.
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
+  const generationJobsByProject = useRef(new Map<string, { jobs: GenerationJob[]; refreshKey: number }>());
   const [isLoadingGenerationJobs, setIsLoadingGenerationJobs] = useState(true);
   const [generationJobsError, setGenerationJobsError] = useState('');
   const [generationJobsRefreshKey, setGenerationJobsRefreshKey] = useState(0);
@@ -207,57 +217,77 @@ export default function TestCasesPage() {
   const [editingCase, setEditingCase] = useState<TestCase | null>(null);
   const [editedScript, setEditedScript] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
+  const sidebarProjects = useMemo(() => (
+    linkedProject && !projectPages.projects.some(project => project.id === linkedProject.id)
+      ? [linkedProject, ...projectPages.projects]
+      : projectPages.projects
+  ), [linkedProject, projectPages.projects]);
+
+  // The selection survives page changes; without one, the first listed project opens.
+  const activeProjectId = selectedProjectId ?? sidebarProjects[0]?.id ?? null;
+
+  // Only the open project's test cases are loaded (see testCasesStore).
+  const { testCases: filteredCases, loaded: areTestCasesLoaded } = useProjectTestCases(user?.uid, activeProjectId);
+
+  // Opening a job from a link (?jobId=) selects its project, wherever it is in the list.
   useEffect(() => {
-    const unsubCases = onSnapshot(collection(db, 'testCases'), (snapshot) => {
-      const cases = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TestCase));
-      setTestCases(cases);
-
-      // Derive unique projects and keep each project's earliest case createdAt.
-      const projMap = new Map<string, Project>();
-      cases.forEach(tc => {
-        const caseCreatedAt = tc.createdAt ? new Date(toMillis(tc.createdAt as unknown)) : new Date(0);
-        const existing = projMap.get(tc.projectId);
-
-        if (!existing) {
-          projMap.set(tc.projectId, { id: tc.projectId, name: tc.projectName, url: '', createdAt: caseCreatedAt });
-          return;
-        }
-
-        if (caseCreatedAt.getTime() < existing.createdAt.getTime()) {
-          projMap.set(tc.projectId, { ...existing, createdAt: caseCreatedAt });
-        }
-      });
-      const projList = Array.from(projMap.values()).sort(
-        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-      );
-
-      setProjects(projList);
-    });
-
-    return () => unsubCases();
-  }, []);
-
-  useEffect(() => {
+    if (!user || !requestedJobId) return;
     let active = true;
+    user.getIdToken()
+      .then(token => fetchGenerationJobSummaries(token, { jobId: requestedJobId }))
+      .then(([job]) => {
+        if (!active || !job) return;
+        setLinkedProject({
+          id: job.projectId,
+          name: job.projectName,
+          url: job.targetUrl,
+          createdAt: new Date(toMillis(job.createdAt)),
+        });
+        setSelectedProjectId(job.projectId);
+      })
+      .catch(error => console.error('Could not open the linked job:', error));
+    return () => { active = false; };
+  }, [user, requestedJobId]);
+
+  useEffect(() => {
     if (!user) {
       setGenerationJobs([]);
       setIsLoadingGenerationJobs(false);
+      generationJobsByProject.current.clear();
       generationJobCursors.current.clear();
       generationCasesByJob.current.clear();
       generationJobActiveStates.current.clear();
-      return () => { active = false; };
+      return;
+    }
+    if (!activeProjectId) {
+      setGenerationJobs([]);
+      setIsLoadingGenerationJobs(false);
+      return;
     }
 
+    const cached = generationJobsByProject.current.get(activeProjectId);
+    setGenerationJobs(cached?.jobs ?? []);
+    if (cached && cached.refreshKey === generationJobsRefreshKey) {
+      setIsLoadingGenerationJobs(false);
+      return;
+    }
+
+    let active = true;
+    const projectId = activeProjectId;
+    const refreshKey = generationJobsRefreshKey;
     setIsLoadingGenerationJobs(true);
     user.getIdToken()
       .then(token => fetchGenerationJobs(
         token,
+        projectId,
         generationJobCursors.current,
         generationCasesByJob.current,
         generationJobActiveStates.current,
       ))
       .then(jobs => {
+        generationJobsByProject.current.set(projectId, { jobs, refreshKey });
         if (active) {
           setGenerationJobs(jobs);
           setGenerationJobsError('');
@@ -271,12 +301,16 @@ export default function TestCasesPage() {
       });
 
     return () => { active = false; };
-  }, [user, generationJobsRefreshKey]);
+  }, [user, activeProjectId, generationJobsRefreshKey]);
 
-  useEffect(() => {
-    const requestedJob = generationJobs.find(job => job.id === requestedJobId);
-    if (requestedJob) setSelectedProjectId(requestedJob.projectId);
-  }, [generationJobs, requestedJobId]);
+  // Idle jobs normally reuse their cached cases; a manual refresh or a delete must reload
+  // them, since cases can change while no job is running (e.g. reset to "planned").
+  const reloadGenerationJobs = () => {
+    generationJobCursors.current.clear();
+    generationCasesByJob.current.clear();
+    generationJobActiveStates.current.clear();
+    setGenerationJobsRefreshKey(key => key + 1);
+  };
 
   const hasActiveGenerationJobs = generationJobs.some(job =>
     ['pending', 'running'].includes(job.status)
@@ -292,39 +326,6 @@ export default function TestCasesPage() {
     return () => window.clearInterval(intervalId);
   }, [hasActiveGenerationJobs]);
 
-  const allProjects = useMemo(() => {
-    const projectMap = new Map(projects.map(project => [project.id, project]));
-    const generationJobProjects = new Map<string, Project>();
-
-    generationJobs.forEach(job => {
-      const createdAt = toMillis(job.createdAt);
-      if (createdAt <= 0) return;
-
-      const existing = projectMap.get(job.projectId);
-      const existingJobProject = generationJobProjects.get(job.projectId);
-
-      if (!existingJobProject || createdAt > existingJobProject.createdAt.getTime()) {
-        generationJobProjects.set(job.projectId, {
-          id: job.projectId,
-          name: existing?.name ?? job.projectName,
-          url: existing?.url || job.targetUrl,
-          createdAt: new Date(createdAt),
-        });
-      }
-    });
-
-    generationJobProjects.forEach(project => projectMap.set(project.id, project));
-
-    return Array.from(projectMap.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }, [projects, generationJobs]);
-
-  const activeProjectId = selectedProjectId && allProjects.some(project => project.id === selectedProjectId)
-    ? selectedProjectId
-    : allProjects[0]?.id ?? null;
-
-  const filteredCases = activeProjectId
-    ? testCases.filter(tc => tc.projectId === activeProjectId)
-    : [];
   const filteredGenerationJobs = activeProjectId
     ? generationJobs.filter(job => job.projectId === activeProjectId && (!requestedJobId || job.id === requestedJobId))
     : [];
@@ -445,12 +446,13 @@ export default function TestCasesPage() {
   };
 
   const handleExecute = async () => {
-    if (selectedIds.length === 0) return;
+    if (selectedIds.length === 0 || !user) return;
     setIsRunning(true);
     try {
+      const token = await user.getIdToken();
       const res = await fetch(`${BACKEND_URL}/api/v2/execute`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ testCaseIds: selectedIds, engine: 'playwright' }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -472,12 +474,43 @@ export default function TestCasesPage() {
     }
   };
 
-  const handleSaveEdit = async () => {
-    if (!editingCase) return;
+  const handleDelete = async () => {
+    if (selectedIds.length === 0 || !user) return;
+    const confirmed = window.confirm(
+      `ลบชุดทดสอบที่เลือก ${selectedIds.length} รายการ?\n`
+      + 'ลบแล้วกู้คืนไม่ได้ เคสที่มาจากแผนทดสอบจะกลับเป็นสถานะ "วางแผนแล้ว" เพื่อให้สั่งสร้างสคริปต์ใหม่ได้',
+    );
+    if (!confirmed) return;
+
+    setIsDeleting(true);
     try {
+      const token = await user.getIdToken();
+      const res = await fetch(`${BACKEND_URL}/api/test-cases/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ testCaseIds: selectedIds }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      setSelectedIds([]);
+      reloadGenerationJobs();
+    } catch (err) {
+      console.error(err);
+      alert(`ลบชุดทดสอบไม่สำเร็จ: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingCase || !user) return;
+    try {
+      const token = await user.getIdToken();
       const res = await fetch(`${BACKEND_URL}/api/test-case-script`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ testCaseId: editingCase.id, script: editedScript }),
       });
 
@@ -514,11 +547,26 @@ export default function TestCasesPage() {
     <div className="flex h-full">
       {/* Sidebar */}
       <aside className="w-56 bg-white border-r border-gray-200 p-4 space-y-1">
-        <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">โปรเจค</h2>
-        {allProjects.length === 0 ? (
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">โปรเจค</h2>
+          <button
+            type="button"
+            onClick={projectPages.refresh}
+            disabled={projectPages.isLoading || !user}
+            className="text-xs text-blue-600 hover:text-blue-800 disabled:opacity-40"
+          >
+            รีเฟรช
+          </button>
+        </div>
+        {projectPages.error && (
+          <p role="alert" className="text-xs text-red-600 break-words">{projectPages.error}</p>
+        )}
+        {projectPages.isLoading && sidebarProjects.length === 0 ? (
+          <p className="text-xs text-gray-400">กำลังโหลด...</p>
+        ) : sidebarProjects.length === 0 ? (
           <p className="text-xs text-gray-400">ยังไม่มีโปรเจค</p>
         ) : (
-          allProjects.map(p => (
+          sidebarProjects.map(p => (
             <button
               key={p.id}
               onClick={() => setSelectedProjectId(p.id)}
@@ -530,19 +578,49 @@ export default function TestCasesPage() {
             </button>
           ))
         )}
+        {(projectPages.hasPrevious || projectPages.hasNext) && (
+          <div className="flex items-center justify-between border-t border-gray-100 pt-3 mt-3 text-xs">
+            <button
+              type="button"
+              onClick={projectPages.previousPage}
+              disabled={!projectPages.hasPrevious || projectPages.isLoading}
+              className="rounded px-2 py-1 text-gray-600 hover:bg-gray-100 disabled:opacity-30"
+            >
+              ← ก่อนหน้า
+            </button>
+            <span className="text-gray-400">หน้า {projectPages.pageIndex + 1}</span>
+            <button
+              type="button"
+              onClick={projectPages.nextPage}
+              disabled={!projectPages.hasNext || projectPages.isLoading}
+              className="rounded px-2 py-1 text-gray-600 hover:bg-gray-100 disabled:opacity-30"
+            >
+              ถัดไป →
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Main */}
       <div className="flex-1 p-6 space-y-4 overflow-auto">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-800">คลังชุดทดสอบ</h1>
-          <button
-            onClick={handleExecute}
-            disabled={selectedIds.length === 0 || isRunning}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            {isRunning ? 'กำลังสั่งรัน...' : `▶ รันที่เลือก (${selectedIds.length})`}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleDelete}
+              disabled={selectedIds.length === 0 || isDeleting || isRunning || !user}
+              className="border border-red-300 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {isDeleting ? 'กำลังลบ...' : `🗑 ลบที่เลือก (${selectedIds.length})`}
+            </button>
+            <button
+              onClick={handleExecute}
+              disabled={selectedIds.length === 0 || isRunning || isDeleting}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {isRunning ? 'กำลังสั่งรัน...' : `▶ รันที่เลือก (${selectedIds.length})`}
+            </button>
+          </div>
         </div>
 
         <section className="overflow-hidden rounded-xl border border-blue-200 bg-white">
@@ -553,7 +631,7 @@ export default function TestCasesPage() {
             </div>
             <button
               type="button"
-              onClick={() => setGenerationJobsRefreshKey(key => key + 1)}
+              onClick={reloadGenerationJobs}
               disabled={isLoadingGenerationJobs || !user}
               className="text-xs font-medium text-blue-700 hover:text-blue-900 disabled:cursor-wait disabled:opacity-50"
             >
@@ -874,7 +952,9 @@ export default function TestCasesPage() {
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
           {filteredCases.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">
-              {activeProjectId ? 'ยังไม่มีชุดทดสอบในโปรเจคนี้' : 'กรุณาเลือกโปรเจค'}
+              {!activeProjectId
+                ? 'กรุณาเลือกโปรเจค'
+                : areTestCasesLoaded ? 'ยังไม่มีชุดทดสอบในโปรเจคนี้' : 'กำลังโหลดชุดทดสอบ...'}
             </div>
           ) : (
             <table className="w-full text-sm">

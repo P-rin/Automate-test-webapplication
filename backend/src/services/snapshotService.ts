@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { env } from "../config/env.js";
 import { findBestSnapshotForCriterion } from "./criterionMatching.js";
 import type { AcceptanceCriterion, GenerationPage } from "../types.js";
+import type { LoginCredentials } from "./credentialService.js";
 
 interface SnapshotElement {
   ref: string;
@@ -89,6 +90,18 @@ const buildDefaultMcpArgs = (): string[] => {
   return args;
 };
 
+/**
+ * Adds --isolated unless the args already pick a browser profile. Without it Playwright MCP
+ * reuses one persistent profile for every session, so cookies and localStorage (a site's
+ * cart, a logged-in session) leak from one job or run into the next, and snapshots and
+ * test results depend on whatever an earlier session left behind.
+ */
+export const withIsolatedBrowserProfile = (args: string[]): string[] => (
+  args.some((arg) => arg === "--isolated" || arg === "--user-data-dir" || arg.startsWith("--user-data-dir="))
+    ? args
+    : [...args, "--isolated"]
+);
+
 export const resolvePlaywrightMcpLaunchConfig = (): { command: string; args: string[] } => {
   const command = env.playwrightMcpCommand?.trim() || defaultMcpCommand;
 
@@ -96,7 +109,7 @@ export const resolvePlaywrightMcpLaunchConfig = (): { command: string; args: str
     throw new Error("PLAYWRIGHT_MCP_COMMAND cannot be npx. Use a direct MCP binary (for example: playwright-mcp).");
   }
 
-  const args = env.playwrightMcpArgs.length ? env.playwrightMcpArgs : buildDefaultMcpArgs();
+  const args = withIsolatedBrowserProfile(env.playwrightMcpArgs.length ? env.playwrightMcpArgs : buildDefaultMcpArgs());
 
   return { command, args };
 };
@@ -170,6 +183,10 @@ export const buildBrowserSessionRestoreFunction = (state: BrowserSessionState): 
   const serializedState = JSON.stringify(JSON.stringify(state));
   return `() => {
     const state = JSON.parse(${serializedState});
+    // Start from exactly the saved state: keys added since (e.g. a cart filled by an
+    // explored click) would otherwise leak into every later snapshot.
+    window.localStorage.clear();
+    window.sessionStorage.clear();
     Object.entries(state.localStorage || {}).forEach(([key, value]) => window.localStorage.setItem(key, value));
     Object.entries(state.sessionStorage || {}).forEach(([key, value]) => window.sessionStorage.setItem(key, value));
     if (state.cookie) {
@@ -195,6 +212,102 @@ const settlePage = async (client: Client, delayMs = 400): Promise<void> => {
   });
 };
 
+export interface TestIdEntry {
+  attr: string;
+  value: string;
+  tag: string;
+  count: number;
+  text: string;
+}
+
+const TEST_ID_ATTRIBUTES = ["data-test", "data-testid", "data-test-id", "data-qa", "data-cy", "id"];
+const MAX_TEST_ID_ENTRIES = 60;
+// Page wrappers (root, page_wrapper) contain most tagged elements and only add noise.
+const MAX_TAGGED_DESCENDANTS = 30;
+
+/**
+ * Collects the visible elements' test attributes. The accessibility snapshot does not show
+ * DOM attributes, so without this list the generator guesses names like `inventory_item`.
+ */
+export const COLLECT_TEST_IDS_FUNCTION = `() => {
+  const attributes = ${JSON.stringify(TEST_ID_ATTRIBUTES)};
+  const selector = attributes.map(attr => "[" + attr + "]").join(",");
+  const groups = new Map();
+  for (const element of document.querySelectorAll(selector)) {
+    if (element.getClientRects().length === 0) continue;
+    if (element.querySelectorAll(selector).length > ${MAX_TAGGED_DESCENDANTS}) continue;
+    const attr = attributes.find(name => element.getAttribute(name));
+    if (!attr) continue;
+    const value = element.getAttribute(attr).trim();
+    // Skip framework-generated ids (React :r1:, ember123, long numbers): they change between loads.
+    if (!value || value.length > 80 || (attr === "id" && /^[:_]|^ember|^react|\\d{4,}/i.test(value))) continue;
+    const key = attr + "=" + value;
+    const group = groups.get(key);
+    if (group) { group.count += 1; continue; }
+    const text = String(element.innerText || element.getAttribute("value") || element.getAttribute("placeholder") || "")
+      .replace(/\\s+/g, " ").trim().slice(0, 40);
+    groups.set(key, { attr, value, tag: element.tagName.toLowerCase(), count: 1, text });
+  }
+  return JSON.stringify([...groups.values()].slice(0, ${MAX_TEST_ID_ENTRIES}));
+}`;
+
+/**
+ * The section shares the generator's snapshot budget (~6.5k chars) with the YAML tree, so it
+ * is capped. Repeated containers (for scoping same-name buttons) and form controls go first.
+ */
+export const TEST_ID_SECTION_MAX_CHARS = 1500;
+const testIdPriority = (entry: TestIdEntry): number => {
+  if (entry.count > 1) return 0;
+  if (["input", "select", "textarea", "button"].includes(entry.tag)) return 1;
+  if (entry.tag === "a") return 2;
+  return entry.tag === "img" ? 4 : 3;
+};
+
+export const formatTestIdSection = (entries: TestIdEntry[], maxChars = TEST_ID_SECTION_MAX_CHARS): string => {
+  if (entries.length === 0) return "";
+  const header = [
+    "### Test IDs",
+    "DOM attributes (not in the tree below). Use only as written: page.locator('[data-test=\"value\"]').",
+  ];
+  const ranked = entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => testIdPriority(a.entry) - testIdPriority(b.entry) || a.index - b.index);
+  const lines: string[] = [];
+  let length = header.join("\n").length;
+  for (const { entry } of ranked) {
+    const repeat = entry.count > 1 ? ` x${entry.count}` : "";
+    const text = entry.text ? ` "${entry.text.slice(0, 30)}"` : "";
+    const line = `- [${entry.attr}="${entry.value}"] <${entry.tag}>${repeat}${text}`;
+    if (length + line.length + 1 > maxChars) {
+      lines.push(`- (${ranked.length - lines.length} more omitted)`);
+      break;
+    }
+    lines.push(line);
+    length += line.length + 1;
+  }
+  return [...header, ...lines, ""].join("\n");
+};
+
+/** Puts the section before the YAML tree so prompt truncation, which cuts the tail, keeps it. */
+export const insertTestIdSection = (snapshot: string, section: string): string => {
+  if (!section) return snapshot;
+  const index = snapshot.indexOf("### Snapshot");
+  return index >= 0
+    ? `${snapshot.slice(0, index)}${section}${snapshot.slice(index)}`
+    : `${snapshot}\n${section}`;
+};
+
+const collectTestIdSection = async (client: Client): Promise<string> => {
+  try {
+    const result = await client.callTool({ name: "browser_evaluate", arguments: { function: COLLECT_TEST_IDS_FUNCTION } });
+    const entries = parseBrowserEvaluateResult(result);
+    return Array.isArray(entries) ? formatTestIdSection(entries as TestIdEntry[]) : "";
+  } catch (error) {
+    console.warn("collectTestIdSection failed; continuing without test IDs:", error instanceof Error ? error.message : error);
+    return "";
+  }
+};
+
 const collectSnapshot = async (client: Client, title: string): Promise<SnapshotStep> => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await settlePage(client, 400 + (attempt * 200));
@@ -202,7 +315,7 @@ const collectSnapshot = async (client: Client, title: string): Promise<SnapshotS
     const snapshotText = getToolText(snapshotResult);
 
     if (snapshotText && hasMeaningfulSnapshotTree(snapshotText)) {
-      return { title, snapshot: snapshotText };
+      return { title, snapshot: insertTestIdSection(snapshotText, await collectTestIdSection(client)) };
     }
   }
 
@@ -278,10 +391,14 @@ export const normalizePageUrl = (href: string, base: string): string | null => {
 export const pageUrlPattern = (href: string): string => {
   const url = new URL(href);
   url.searchParams.sort();
+  // ?id=4 and ?id=5 are the same page template, just like /items/4 and /items/5.
+  for (const [key, value] of [...url.searchParams.entries()]) {
+    if (/^\d+$/.test(value) || /^[A-Za-z0-9_-]{16,}$/.test(value)) url.searchParams.set(key, ":id");
+  }
   const pathname = url.pathname
     .replace(/\/\d+(?=\/|$)/g, "/:id")
     .replace(/\/[A-Za-z0-9_-]{16,}(?=\/|$)/g, "/:id");
-  return `${url.origin}${pathname}${url.search}`;
+  return `${url.origin}${pathname}${decodeURIComponent(url.search)}`;
 };
 
 const pageIdForPattern = (urlPattern: string): string =>
@@ -528,12 +645,22 @@ const summarizeSnapshotStep = (step: SnapshotStep): string => {
   ].join("\n");
 };
 
+/**
+ * Credentials entered on the setup page win; otherwise fall back to credentials written
+ * in the specification text (legacy behavior).
+ */
+export const resolveLoginCredentials = (
+  specification: string,
+  loginCredentials?: LoginCredentials | null,
+): CredentialPair | null => loginCredentials
+  ? { identifier: loginCredentials.username, password: loginCredentials.password }
+  : parseCredentials(specification);
+
 const attemptLogin = async (
   client: Client,
-  specification: string,
+  credentials: CredentialPair | null,
   initialSnapshot: string,
 ): Promise<SnapshotStep | null> => {
-  const credentials = parseCredentials(specification);
   if (!credentials) return null;
 
   const elements = parseSnapshotElements(initialSnapshot);
@@ -568,8 +695,42 @@ const attemptLogin = async (
     // Ignore action stabilization errors and continue with snapshot capture.
   }
 
-  return collectSnapshot(client, "After login attempt");
+  const step = await collectSnapshot(client, "After login attempt");
+  // A failed login leaves the typed values in the form; keep the password out of the
+  // snapshot that is stored and sent to the LLM.
+  return { ...step, snapshot: step.snapshot.split(credentials.password).join("********") };
 };
+
+/**
+ * Controls discovery must never click: they log in/out, leave the page, or change data.
+ * A data-changing click (e.g. "Add to cart") leaves the page in a modified state, and that
+ * state then ends up in the snapshots that test plans and scripts are written from.
+ * English terms match whole words ("add" blocks "Add to cart", not "Address book");
+ * Thai has no word spacing, so Thai terms match anywhere in the name.
+ */
+export const DISCOVERY_BLOCKED_TERMS = [
+  // session and navigation away
+  "login", "log in", "sign in", "register", "sign up", "logout", "log out", "sign out",
+  "back", "close", "cancel",
+  // data-changing actions
+  "add", "remove", "delete", "save", "update", "submit", "send", "post", "apply", "reset", "clear",
+  "purchase", "checkout", "payment", "pay", "buy", "order", "book", "subscribe", "upload", "confirm",
+  // No "ปิด" (close): it would also match "เปิด" (open).
+  "เข้าสู่ระบบ", "สมัคร", "ออกจากระบบ", "ย้อนกลับ", "ยกเลิก",
+  "เพิ่ม", "ลบ", "บันทึก", "ส่ง", "ยืนยัน", "ชำระ", "ซื้อ", "สั่ง", "จอง", "อัปโหลด", "รีเซ็ต", "ล้าง",
+];
+
+/** Browser-side and Node-side check for DISCOVERY_BLOCKED_TERMS (inlined into page scripts). */
+const IS_BLOCKED_ACTION_NAME_JS = `(name => {
+  const text = String(name).toLocaleLowerCase();
+  return ${JSON.stringify(DISCOVERY_BLOCKED_TERMS)}.some(term => /^[a-z ]+$/.test(term)
+    ? new RegExp("(^|[^a-z])" + term + "([^a-z]|$)").test(text)
+    : text.includes(term));
+})`;
+
+export const isBlockedDiscoveryAction: (name: string) => boolean = new Function(
+  `return ${IS_BLOCKED_ACTION_NAME_JS};`,
+)() as (name: string) => boolean;
 
 const shouldExploreElement = (element: SnapshotElement): boolean => {
   if (!["button", "link", "tab", "menuitem", "menuitemcheckbox", "menuitemradio"].includes(element.role)) return false;
@@ -577,15 +738,7 @@ const shouldExploreElement = (element: SnapshotElement): boolean => {
   const name = normalizeText(element.name);
   if (!name) return false;
 
-  const blockedTerms = [
-    "login", "log in", "sign in", "register", "เข้าสู่ระบบ", "สมัคร",
-    "logout", "ออกจากระบบ", "back", "ย้อนกลับ", "close", "cancel",
-    "delete", "remove", "purchase", "checkout", "payment", "pay", "submit",
-    "ลบ", "ชำระ", "ซื้อ", "ยืนยัน",
-  ];
-  if (blockedTerms.some((term) => name.includes(term))) return false;
-
-  return true;
+  return !isBlockedDiscoveryAction(name);
 };
 
 const getExplorationCandidates = (snapshot: string): SnapshotElement[] => {
@@ -616,27 +769,67 @@ interface PageDiscoveryData {
   navigationActions: string[];
 }
 
+/**
+ * Browser-side function that names a clickable element. Shared by the discovery scan and the
+ * click step so both identify the same element. Falls back to title / data-test / id for
+ * icon-only links such as a cart icon.
+ */
+const ELEMENT_ACTION_NAME_JS = `element => (
+  element.getAttribute("aria-label")
+  || element.textContent
+  || element.getAttribute("title")
+  || element.getAttribute("data-test")
+  || element.getAttribute("data-testid")
+  || element.id
+  || ""
+).replace(/\\s+/g, " ").trim()`;
+
 const collectPageDiscoveryData = async (client: Client, baseUrl: string): Promise<PageDiscoveryData> => {
   const result = await client.callTool({
     name: "browser_evaluate",
     arguments: {
       function: `() => JSON.stringify((() => {
         const navigationTerms = ["menu", "dashboard", "home", "docs", "documentation", "เมนู", "หน้าแรก", "แดชบอร์ด"];
-        const blockedTerms = ["login", "log in", "sign in", "register", "logout", "log out", "sign out", "delete", "remove", "purchase", "checkout", "payment", "pay", "submit", "เข้าสู่ระบบ", "สมัคร", "ออกจากระบบ", "ลบ", "ชำระ", "ซื้อ", "ยืนยัน"];
-        const navigationActions = Array.from(document.querySelectorAll('button,[role="tab"],[role="menuitem"]'))
-          .map(element => ({ element, name: (element.getAttribute("aria-label") || element.textContent || "").trim() }))
+        const isBlockedActionName = ${IS_BLOCKED_ACTION_NAME_JS};
+        // Links whose destination is decided by JavaScript (href="#", javascript:, no href,
+        // or role="link") are invisible to the href crawl, so they are clicked instead.
+        const isScriptLink = element => {
+          if (element.tagName === "A") {
+            const href = (element.getAttribute("href") || "").trim();
+            return !href || href === "#" || href.toLowerCase().startsWith("javascript:");
+          }
+          return element.getAttribute("role") === "link";
+        };
+        const elementActionName = ${ELEMENT_ACTION_NAME_JS};
+        // Repeated items (item-4-title-link, item-5-title-link, ...) usually lead to the same
+        // page template; clicking one of them is enough and saves the click budget.
+        const structuralKey = element => {
+          const identity = element.getAttribute("data-test") || element.getAttribute("data-testid") || element.id || "";
+          return identity ? element.tagName + ":" + identity.replace(/\\d+/g, "#") : "";
+        };
+        const seenStructures = new Set();
+        const navigationActions = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="menuitem"],[role="link"]'))
+          .map(element => ({ element, name: elementActionName(element) }))
+          .filter(({ element }) => {
+            const key = structuralKey(element);
+            if (!key) return true;
+            if (seenStructures.has(key)) return false;
+            seenStructures.add(key);
+            return true;
+          })
           .filter(({ element, name }) => {
             const text = name.toLocaleLowerCase();
             const rect = element.getBoundingClientRect();
             const isNavigationControl = element.getAttribute("role") === "tab"
               || element.getAttribute("role") === "menuitem"
               || Boolean(element.closest('nav,[role="navigation"]'));
+            const isCandidate = isScriptLink(element)
+              || (element.tagName !== "A" && isNavigationControl && navigationTerms.some(term => text.includes(term)));
             return Boolean(name)
               && rect.width > 0
               && rect.height > 0
-              && isNavigationControl
-              && !blockedTerms.some(term => text.includes(term))
-              && navigationTerms.some(term => text.includes(term));
+              && isCandidate
+              && !isBlockedActionName(text);
           })
           .map(({ name }) => name);
         return {
@@ -694,6 +887,24 @@ const collectPageDiscoveryData = async (client: Client, baseUrl: string): Promis
   };
 };
 
+/**
+ * Many sites use one <title> for every page; append the URL path to repeated titles so
+ * the end user can tell the pages apart when selecting them.
+ */
+export const disambiguatePageTitles = (pages: GenerationPage[]): GenerationPage[] => {
+  const titleCounts = new Map<string, number>();
+  for (const page of pages) titleCounts.set(page.title, (titleCounts.get(page.title) ?? 0) + 1);
+  return pages.map((page) => {
+    if ((titleCounts.get(page.title) ?? 0) < 2) return page;
+    try {
+      const url = new URL(page.urlPattern);
+      return { ...page, title: `${page.title} (${url.pathname}${decodeURIComponent(url.search)})` };
+    } catch {
+      return page;
+    }
+  });
+};
+
 const loginRelatedText = (value: string): boolean =>
   ["login", "log in", "sign in", "เข้าสู่ระบบ"].some((term) => normalizeText(value).includes(term));
 
@@ -706,7 +917,9 @@ export const discoverPages = async (
     maxDepth: env.generationJobPageMaxDepth,
     maxNavigationActions: env.generationJobPageMaxNavigationActions,
   },
+  loginCredentials?: LoginCredentials | null,
 ): Promise<PageDiscoveryResult> => {
+  const credentials = resolveLoginCredentials(specification, loginCredentials);
   const { command, args } = resolvePlaywrightMcpLaunchConfig();
   const transport = new StdioClientTransport({ command, args });
   const client = new Client({ name: "autonomous-verification-backend", version: "1.0.0" });
@@ -716,13 +929,31 @@ export const discoverPages = async (
     const landingUrl = normalizePageUrl(url, url) ?? url;
     await client.callTool({ name: "browser_navigate", arguments: { url: landingUrl } });
     let authState: BrowserSessionState | null = null;
-    if (parseCredentials(specification)) {
+    let postLoginUrl: string | null = null;
+    let loginIssue = "";
+    if (credentials) {
       const landingSnapshot = await collectSnapshot(client, "Page discovery login");
-      const loginStep = await attemptLogin(client, specification, landingSnapshot.snapshot);
-      if (loginStep) authState = await captureBrowserSessionState(client);
+      const loginStep = await attemptLogin(client, credentials, landingSnapshot.snapshot);
+      if (!loginStep) {
+        loginIssue = "Could not find a login form (username, password, and login button) on the target URL";
+      } else {
+        const afterLogin = await collectPageDiscoveryData(client, landingUrl);
+        if (afterLogin.metadata.hasPasswordField) {
+          loginIssue = "Login with the provided credentials did not succeed (the login form is still shown)";
+        } else {
+          authState = await captureBrowserSessionState(client);
+          postLoginUrl = normalizePageUrl(afterLogin.metadata.url, landingUrl);
+        }
+      }
+      if (loginIssue) console.warn(`discoverPages: ${loginIssue}`);
     }
 
-    const queue = [{ url: landingUrl, depth: 0 }];
+    // Start from the page the site shows after login. Revisiting the landing URL usually
+    // shows the login form again, which would end discovery at the login page.
+    const queue: Array<{ url: string; depth: number }> = [];
+    if (postLoginUrl && isSameOrigin(landingUrl, postLoginUrl)) queue.push({ url: postLoginUrl, depth: 0 });
+    queue.push({ url: landingUrl, depth: 0 });
+    const loginPagePattern = postLoginUrl ? pageUrlPattern(landingUrl) : null;
     const pagesByPattern = new Map<string, GenerationPage>();
     const headingsByPattern = new Map<string, string>();
     const visitedPatterns = new Set<string>();
@@ -749,8 +980,10 @@ export const discoverPages = async (
         const metadata = pageData.metadata;
         const title = metadata.title || metadata.heading || currentUrl;
         const actualUrl = normalizePageUrl(metadata.url, currentUrl) ?? currentUrl;
-        const loginRequired = metadata.hasPasswordField
-          || (pageUrlPattern(actualUrl) !== pattern && loginRelatedText(`${title} ${metadata.heading} ${actualUrl}`));
+        // The page we logged in on is the public login page itself, not a page behind login.
+        const isLoginPage = pattern === loginPagePattern && metadata.hasPasswordField;
+        const loginRequired = !isLoginPage && (metadata.hasPasswordField
+          || (pageUrlPattern(actualUrl) !== pattern && loginRelatedText(`${title} ${metadata.heading} ${actualUrl}`)));
         const page: GenerationPage = {
           pageId: pageIdForPattern(pattern),
           title,
@@ -763,7 +996,7 @@ export const discoverPages = async (
         pagesByPattern.set(pattern, page);
         headingsByPattern.set(pattern, metadata.heading);
 
-        if (loginRequired) continue;
+        if (loginRequired || isLoginPage) continue;
         const childLinks = pageData.links.filter((childUrl) => pageUrlPattern(childUrl) !== pattern
           && !visitedPatterns.has(pageUrlPattern(childUrl)));
         if (current.depth >= limits.maxDepth) {
@@ -788,8 +1021,9 @@ export const discoverPages = async (
               arguments: {
                 function: `() => {
                   const targetName = ${JSON.stringify(action)}.replace(/\\s+/g, " ").trim().toLocaleLowerCase();
-                  const target = Array.from(document.querySelectorAll('button,[role="tab"],[role="menuitem"]'))
-                    .find(element => (element.getAttribute("aria-label") || element.textContent || "").replace(/\\s+/g, " ").trim().toLocaleLowerCase() === targetName);
+                  const elementActionName = ${ELEMENT_ACTION_NAME_JS};
+                  const target = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="menuitem"],[role="link"]'))
+                    .find(element => elementActionName(element).toLocaleLowerCase() === targetName);
                   if (target) target.click();
                   return new Promise(resolve => setTimeout(() => resolve(JSON.stringify(window.location.href)), 300));
                 }`,
@@ -810,7 +1044,7 @@ export const discoverPages = async (
       }
     }
 
-    const pages = [...pagesByPattern.values()];
+    const pages = disambiguatePageTitles([...pagesByPattern.values()]);
     const matchesByAcId = new Map<string, string>();
     for (const criterion of acceptanceCriteria) {
       const match = findBestSnapshotForCriterion(criterion, pages.map((page) => ({
@@ -825,10 +1059,15 @@ export const discoverPages = async (
         .map(([acId]) => acId);
     }
 
+    const complete = !incomplete && queue.length === 0 && !loginIssue;
+    const stopReasons = [
+      loginIssue,
+      !incomplete && queue.length === 0 ? "" : "Page discovery reached its page limit or could not inspect one or more pages",
+    ].filter(Boolean);
     return {
       pages,
-      complete: !incomplete && queue.length === 0,
-      ...(!incomplete && queue.length === 0 ? {} : { stopReason: "Page discovery reached its page limit or could not inspect one or more pages" }),
+      complete,
+      ...(stopReasons.length > 0 ? { stopReason: stopReasons.join("; ") } : {}),
     };
   } finally {
     try {
@@ -921,7 +1160,9 @@ export const discoverSelectedPageSnapshots = async (
     maxCandidates: env.generationJobMaxCandidates,
     maxDepth: env.generationJobMaxDepth,
   },
+  loginCredentials?: LoginCredentials | null,
 ): Promise<AccessibilityDiscoveryResult> => {
+  const credentials = resolveLoginCredentials(specification, loginCredentials);
   const { command, args } = resolvePlaywrightMcpLaunchConfig();
   const transport = new StdioClientTransport({ command, args });
   const client = new Client({ name: "autonomous-verification-backend", version: "1.0.0" });
@@ -931,10 +1172,10 @@ export const discoverSelectedPageSnapshots = async (
     const snapshots: SnapshotStep[] = [];
     let incomplete = false;
     let authState: BrowserSessionState | null = null;
-    if (parseCredentials(specification)) {
+    if (credentials) {
       await client.callTool({ name: "browser_navigate", arguments: { url } });
       const landingSnapshot = await collectSnapshot(client, "Selected-page login");
-      const loginStep = await attemptLogin(client, specification, landingSnapshot.snapshot);
+      const loginStep = await attemptLogin(client, credentials, landingSnapshot.snapshot);
       if (loginStep) authState = await captureBrowserSessionState(client);
     }
     const knownSnapshots = new Set<string>();
@@ -1004,7 +1245,9 @@ export const discoverAccessibilitySnapshot = async (
     maxCandidates: env.generationJobMaxCandidates,
     maxDepth: env.generationJobMaxDepth,
   },
+  loginCredentials?: LoginCredentials | null,
 ): Promise<AccessibilityDiscoveryResult> => {
+  const credentials = resolveLoginCredentials(specification, loginCredentials);
   const { command, args } = resolvePlaywrightMcpLaunchConfig();
   const transport = new StdioClientTransport({ command, args });
   const client = new Client({ name: "autonomous-verification-backend", version: "1.0.0" });
@@ -1018,7 +1261,7 @@ export const discoverAccessibilitySnapshot = async (
     const landingStep = await collectSnapshot(client, "Landing page");
     snapshots.push(landingStep);
 
-    const loginStep = await attemptLogin(client, specification, landingStep.snapshot);
+    const loginStep = await attemptLogin(client, credentials, landingStep.snapshot);
     const authState = loginStep ? await captureBrowserSessionState(client) : null;
     if (loginStep) {
       snapshots.push(loginStep);

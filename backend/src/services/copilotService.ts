@@ -4,7 +4,12 @@ import { Ollama } from "ollama";
 import type { Message, Tool } from "ollama";
 import type { GeneratedArtifact, GeneratedTestCase, TestPlan } from "../types.js";
 import { resolvePlaywrightMcpLaunchConfig } from "./snapshotService.js";
-import { buildAgentGenerationPrompt as buildOllamaGenerationPrompt } from "./ollamaService.js";
+import {
+  assertNoPlainTextSelectors,
+  assertValidTypeScriptSyntax,
+  buildAgentGenerationPrompt as buildOllamaGenerationPrompt,
+  VERIFY_OUTCOME_RULE,
+} from "./ollamaService.js";
 
 interface CopilotRequest {
   projectName: string;
@@ -164,6 +169,8 @@ export const validateGeneratedScript = (script: string): void => {
     throw new Error("Generated script must not use snapshot reference selectors.");
   }
 
+  assertNoPlainTextSelectors(trimmedScript);
+
   const stack: string[] = [];
   let inSingleQuote = false;
   let inDoubleQuote = false;
@@ -261,6 +268,8 @@ export const validateGeneratedScript = (script: string): void => {
   if (inSingleQuote || inDoubleQuote || inBacktick || inLineComment || inBlockComment || stack.length > 0) {
     throw new Error("Generated script contains unbalanced syntax or unfinished code blocks.");
   }
+
+  assertValidTypeScriptSyntax(script);
 };
 
 const isValidTestPlan = (value: unknown): value is TestPlan => {
@@ -300,6 +309,7 @@ const buildPlannerPrompt = (payload: CopilotRequest, maxPromptChars: number): st
     "5. EFFICIENCY RULE: For simple screens (e.g., splash screen, static display), keep the scenarios concise and avoid generating redundant or low-value cases.",
     "6. ISOLATION RULE: Each test plan MUST represent exactly ONE distinct scenario (e.g., Happy Path, Invalid Password, Empty Fields). DO NOT combine positive and negative flows into a single plan.",
     "7. MANDATORY LOGIN STEP: For any scenario requiring user authentication or a new session, explicitly include the Login steps (Navigate to login -> Enter credentials -> Click login) as the initial steps in `testSteps`.",
+    `8. ${VERIFY_OUTCOME_RULE}`,
     "",
     "[OUTPUT FORMAT]",
     "Output ONLY a valid JSON object (not an array).",
@@ -417,6 +427,7 @@ const callOllamaModel = async (
         model,
         messages,
         tools,
+        think: false,
         format: "json",
         options: { temperature: 0.1 },
       });

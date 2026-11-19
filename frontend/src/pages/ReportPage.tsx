@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { PieChart, Pie, Cell, Tooltip, Legend } from 'recharts';
 import { db } from '../lib/firebase';
+import { useAuth } from '../context/AuthContext';
 import type { TestRun } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
@@ -16,6 +17,7 @@ const formatTimestamp = (value: Date | TestRun['startedAt'] | undefined): string
 export default function ReportPage() {
   const { runId } = useParams<{ runId: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [run, setRun] = useState<TestRun | null>(null);
   const [loading, setLoading] = useState(true);
   const [isReRunning, setIsReRunning] = useState(false);
@@ -27,17 +29,23 @@ export default function ReportPage() {
         setRun({ id: snapshot.id, ...snapshot.data() } as TestRun);
       }
       setLoading(false);
+    }, (error) => {
+      // Rules deny runs of other users; show "not found" instead of loading forever.
+      console.error('testRun listener failed:', error);
+      setRun(null);
+      setLoading(false);
     });
     return () => unsubscribe();
   }, [runId]);
 
   const handleReRun = async () => {
-    if (!run) return;
+    if (!run || !user) return;
     setIsReRunning(true);
     try {
+      const token = await user.getIdToken();
       const res = await fetch(`${BACKEND_URL}/api/v2/execute`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ testCaseIds: run.testCaseIds, engine: 'playwright' }),
       });
       if (!res.ok) throw new Error(await res.text());

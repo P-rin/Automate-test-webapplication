@@ -12,10 +12,12 @@ import {
   parseJsonArrayResponse,
   renderCriteriaForPrompt,
   sanitizePlanTraceability,
+  snapshotPageUrl,
   validateGeneratedScript,
   type LlmGenerationOptions,
 } from "./ollamaService.js";
 import type { AcceptanceCriterion, TestPlan } from "../types.js";
+import { PlanCoverageRegistry } from "./planDedup.js";
 
 const generationPayload = {
   projectName: "Demo app",
@@ -169,6 +171,85 @@ test("validateGeneratedScript rejects discouraged waiting and page query APIs", 
   }
 });
 
+const wrapInTest = (body: string): string => `import { test, expect } from '@playwright/test';\n` +
+  `test('example', async ({ page }) => {\n` +
+  `  await page.goto('https://www.saucedemo.com/');\n` +
+  `  ${body}\n` +
+  `  await expect(page).toHaveURL(/inventory/);\n` +
+  `});\n`;
+
+test("validateGeneratedScript rejects plain text used as a CSS selector", () => {
+  for (const body of [
+    "await page.fill('Username', 'standard_user');",
+    "await page.fill(\"Password\", process.env.TEST_PASSWORD ?? '');",
+    "await page.click('Login');",
+    "await page.click('Add to cart');",
+    "await page.locator('Login').click();",
+    "await page.check('Remember me');",
+  ]) {
+    assert.throws(
+      () => validateGeneratedScript(wrapInTest(body)),
+      (error: unknown) => error instanceof Error
+        && error.message.startsWith("Generated script uses plain text")
+        && /getByRole/.test(error.message),
+      body,
+    );
+  }
+});
+
+test("validateGeneratedScript accepts real CSS selectors and role locators", () => {
+  for (const body of [
+    "await page.fill('#user-name', 'standard_user');",
+    "await page.fill('input[name=\"password\"]', 'x');",
+    "await page.click('.btn_action');",
+    "await page.click('button');",
+    "await page.locator('my-widget').click();",
+    "await page.click('text=Login');",
+    "await page.click('//button');",
+    "await page.getByRole('textbox', { name: 'Username' }).fill('standard_user');",
+    "await page.getByRole('button', { name: 'Login' }).click();",
+    "await page.getByText('Login').click();",
+  ]) {
+    assert.doesNotThrow(() => validateGeneratedScript(wrapInTest(body)), body);
+  }
+});
+
+test("validateGeneratedScript rejects TypeScript syntax errors seen in real generated scripts", () => {
+  const cases: Array<[string, RegExp]> = [
+    [
+      // Unterminated regex: the closing slash is escaped.
+      wrapInTest("await expect(page).toHaveURL(/\\/);"),
+      /syntax error at line 4:.*Unterminated regular expression.*Offending line: await expect\(page\)\.toHaveURL\(\/\\\/\);/,
+    ],
+    [
+      `import { test, expect } from '@playwright/test';\n` +
+      `test('เข้าสู่ระบบด้วย 'standard_user' และรหัสผ่านที่ถูกต้อง', async ({ page }) => {\n` +
+      `  await page.goto('https://www.saucedemo.com/');\n` +
+      `  await expect(page).toHaveURL(/inventory/);\n` +
+      `});\n`,
+      /syntax error at line 2:/,
+    ],
+  ];
+
+  for (const [script, expected] of cases) {
+    assert.throws(
+      () => validateGeneratedScript(script),
+      (error: unknown) => error instanceof Error
+        && error.message.startsWith("Generated script has a TypeScript syntax error")
+        && expected.test(error.message),
+    );
+  }
+});
+
+test("validateGeneratedScript accepts valid TypeScript including type syntax and regexes", () => {
+  assert.doesNotThrow(() => validateGeneratedScript(wrapInTest(
+    "const email: string = process.env.TEST_EMAIL ?? '';\n" +
+    "  await page.getByRole('textbox', { name: 'Username' }).fill(email);\n" +
+    "  await expect(page).toHaveURL(/\\/inventory\\.html$/);\n" +
+    "  await expect(page.getByText(\"It's done\")).toBeVisible();",
+  )));
+});
+
 test("validateGeneratedScript rejects script with missing import", () => {
   const invalidScript = `test('example', async ({ page }) => {\n` +
     `  await page.goto('https://example.com');\n` +
@@ -264,6 +345,22 @@ test("buildAgentGenerationPrompt includes target URL and Playwright-only rules",
   assert.match(prompt, /http:\/\/localhost:5173\//i);
   assert.match(prompt, /Ensure login flow works/i);
   assert.match(prompt, /Specification and the Assigned Test Plan Object come from the user and are the primary source of truth/);
+  assert.match(prompt, /getByRole\('textbox', \{ name: 'Username' \}\)\.fill/);
+  assert.match(prompt, /page\.fill\('Username', \.\.\.\).*WRONG/);
+  assert.match(prompt, /never assume an element is a heading/);
+  assert.doesNotMatch(prompt, /page\.fill\(selector, value\)/);
+  assert.doesNotMatch(prompt, /getByRole\('heading', \{ name: \/example\/i \}\)/);
+  assert.match(prompt, /no quote characters inside it/);
+  assert.match(prompt, /Never write \/\\\/ or any regex whose closing slash is escaped/);
+  assert.match(prompt, /A URL check alone is not a meaningful assertion/);
+  assert.match(prompt, /\.fill\(process\.env\.TEST_EMAIL \?\? ''\)/);
+  assert.doesNotMatch(prompt, /toHaveURL\(\/<expected path>\/\)/);
+  // Native <select> options can't be clicked; the prompt must steer to selectOption.
+  assert.match(prompt, /\.selectOption\(\{ label: 'Price \(high to low\)' \}\)/);
+  assert.match(prompt, /page\.getByRole\('option', \.\.\.\)\.click\(\) is WRONG/);
+  assert.match(prompt, /assert the RESULT of the choice/);
+  // Repeated controls (one "Add to cart" per product) must be scoped to their item.
+  assert.match(prompt, /\.filter\(\{ hasText: 'Sauce Labs Backpack' \}\)\.getByRole\('button', \{ name: 'Add to cart' \}\)/);
 });
 
 test("renderCriteriaForPrompt orders uncovered first, omits manual criteria, and notes budget omissions", () => {
@@ -300,6 +397,8 @@ test("planner uses acceptance criteria instead of raw specification when provide
   assert.match(userPrompt, /already covered/);
   assert.match(userPrompt, /Prefer a case that verifies a criterion not yet covered/);
   assert.doesNotMatch(userPrompt, /RAW_SPECIFICATION_SENTINEL/);
+  // Every plan must end with a step that checks an outcome, so scripts don't guess one.
+  assert.match(userPrompt, /The last `testSteps` item must check the `expectedResult`/);
 });
 
 test("planner retains the raw requirement specification when no criteria are available", async () => {
@@ -569,7 +668,7 @@ test("think is sent only to planner when enabled, alongside shared Ollama settin
   }, options);
 
   assert.equal(requests[0].think, true);
-  assert.equal("think" in requests[1], false);
+  assert.equal(requests[1].think, false);
   assert.equal(requests[0].options?.num_ctx, 4096);
   assert.equal(requests[1].options?.num_ctx, 4096);
   assert.equal(requests[0].keep_alive, "10m");
@@ -937,12 +1036,57 @@ test("generateNextTestPlan keeps the most recently covered cases within its prom
       title: `Covered case ${index + 1}`,
       description: `Description ${index + 1}`,
     })),
-    { ollamaClient, maxPromptChars: 1200 },
+    { ollamaClient, maxPromptChars: 3000 },
   );
 
-  assert.ok(userPrompt.length <= 1200);
+  assert.ok(userPrompt.length <= 3000);
   assert.match(userPrompt, /Covered case 100/);
-  assert.doesNotMatch(userPrompt, /Covered case 1:/);
+  assert.doesNotMatch(userPrompt, /^- Covered case 1$/m);
+  assert.doesNotMatch(userPrompt, /Description 100/, "covered cases are listed by title only, not description");
+});
+
+test("processSnapshotTestPlans shares coverage across snapshots and rejects semantic duplicates", async () => {
+  const done = {
+    status: "done", id: "", title: "", description: "", type: "UI", testSteps: [], expectedResult: "",
+    requirementIds: [], category: "exploratory", targetElement: "", inputVariant: "",
+  };
+  const themeCase = (title: string, targetElement: string, inputVariant: string) => ({
+    status: "case",
+    id: "planner-id",
+    title,
+    description: "คลิกปุ่มสลับธีมจากโหมดสว่างแล้วตรวจสอบว่าหน้าเว็บเป็นโหมดมืด",
+    type: "UI",
+    testSteps: ["เปิดหน้าแรก", "คลิกปุ่ม 'Switch between dark and light mode'"],
+    expectedResult: "พื้นหลังเป็นสีเข้ม และปุ่มแสดงว่าเป็นโหมดมืด",
+    requirementIds: [],
+    category: "exploratory",
+    targetElement,
+    inputVariant,
+  });
+  const requests: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+  const ollamaClient = mockOllamaClient([
+    // Page 1
+    { content: JSON.stringify(themeCase("ตรวจสอบการสลับธีมสีจากโหมดสว่างเป็นมืด (Dark Mode)", "Switch between dark and light mode", "light -> dark")) },
+    { content: JSON.stringify(done) },
+    // Page 2: same toggle, reworded title and slightly different label/variant wording
+    { content: JSON.stringify(themeCase("ตรวจสอบการเปลี่ยนโหมดสี (Dark/Light Mode)", "Switch between dark and light mode (currently light mode)", "light mode -> dark mode")) },
+    { content: JSON.stringify(done) },
+  ], requests as never);
+  const coverage = new PlanCoverageRegistry();
+  const persisted: string[] = [];
+  const persist = async (plan: TestPlan) => {
+    persisted.push(plan.title);
+    return true;
+  };
+
+  await processSnapshotTestPlans(generationPayload, "Home page", { ollamaClient }, persist, [], new Set(), true, coverage);
+  await processSnapshotTestPlans(generationPayload, "Docs page", { ollamaClient }, persist, [], new Set(), true, coverage);
+
+  assert.deepEqual(persisted, ["ตรวจสอบการสลับธีมสีจากโหมดสว่างเป็นมืด (Dark Mode)"]);
+  const page2Prompt = requests[2].messages.find((message) => message.role === "user")?.content ?? "";
+  assert.match(page2Prompt, /- ตรวจสอบการสลับธีมสีจากโหมดสว่างเป็นมืด \(Dark Mode\) \[Switch between dark and light mode \| light -> dark\]/);
+  const page2RetryPrompt = requests[3].messages.find((message) => message.role === "user")?.content ?? "";
+  assert.doesNotMatch(page2RetryPrompt, /เปลี่ยนโหมดสี/, "rejected duplicates are not added to the covered list");
 });
 
 test("processSnapshotTestPlans persists each case before requesting the next and has no small fixed cap", async () => {
@@ -1114,4 +1258,34 @@ test("processSnapshotTestPlans reports incomplete when planning stalls on duplic
   assert.equal(result.status, "incomplete");
   assert.equal(result.planCount, 1);
   assert.equal(persistedCount, 1);
+});
+
+test("generator starts at the page the snapshot was captured on and uses only listed test IDs", () => {
+  const snapshot = [
+    "### Page",
+    "- Page URL: https://www.saucedemo.com/inventory.html",
+    "### Test IDs",
+    "- [data-test=\"inventory-item\"] <div> x6 \"Sauce Labs Backpack\"",
+    "### Snapshot",
+    "```yaml",
+    "- button \"Add to cart\" [ref=e1]",
+    "```",
+  ].join("\n");
+  assert.equal(snapshotPageUrl(snapshot), "https://www.saucedemo.com/inventory.html");
+  assert.equal(snapshotPageUrl("heading Example Domain"), "");
+  assert.equal(snapshotPageUrl("- Page URL: chrome-error://chromewebdata/"), "");
+
+  const plan: TestPlan = {
+    id: "TC-001", title: "Add to cart", description: "Add a product", type: "UI",
+    testSteps: ["Click Add to cart"], expectedResult: "Cart shows 1",
+  };
+  const prompt = buildGeneratorPrompt({ ...generationPayload, accessibilitySnapshot: snapshot }, plan, 14000);
+  assert.match(prompt, /Start URL: https:\/\/www\.saucedemo\.com\/inventory\.html/);
+  assert.match(prompt, /already logged in/);
+  assert.match(prompt, /Do not use loops or arrays to create several test\(\) calls/);
+  assert.match(prompt, /only attribute selectors listed in its `### Test IDs` section/);
+  assert.match(prompt, /\[data-test="inventory-item"\] <div> x6/);
+
+  // Without a captured page URL, fall back to the target URL.
+  assert.match(buildGeneratorPrompt(generationPayload, plan, 14000), /Start URL: https:\/\/example\.com/);
 });

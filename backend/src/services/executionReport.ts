@@ -86,11 +86,16 @@ export const countResultsRecursive = (suite: PlaywrightSuite): PlaywrightResultC
 };
 
 export const parsePlaywrightReport = (
-  report: PlaywrightSuite & { stats?: { duration?: number } },
+  report: PlaywrightSuite & { stats?: { duration?: number }; errors?: Array<{ message?: string; stack?: string }> },
 ): PlaywrightResultCounts & { duration: number } => {
   const counts = countResultsRecursive({ suites: report.suites });
+  // Errors outside any test, e.g. a failing globalSetup (pre-login) that stops the run.
+  const runErrors = (report.errors ?? [])
+    .map((error) => error.message ?? error.stack)
+    .filter((message): message is string => Boolean(message));
   return {
     ...counts,
+    errors: [...runErrors, ...counts.errors],
     duration: report.stats?.duration ?? 0,
   };
 };

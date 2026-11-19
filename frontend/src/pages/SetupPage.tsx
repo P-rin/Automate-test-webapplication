@@ -99,6 +99,9 @@ export default function SetupPage() {
   const [url, setUrl] = useState('https://example.com');
   const [requirementsText, setRequirementsText] = useState('');
   const [allowMutatingTests, setAllowMutatingTests] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -142,10 +145,13 @@ export default function SetupPage() {
     criteria?: string[];
     script?: string;
   }) => {
+    if (!user) throw new Error('กรุณาเข้าสู่ระบบก่อนบันทึกชุดทดสอบ');
+    const token = await user.getIdToken();
     const res = await fetch(`${BACKEND_URL}/api/save-generated`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         projectName: projectName || url,
@@ -194,6 +200,11 @@ export default function SetupPage() {
       return;
     }
 
+    if (Boolean(loginUsername.trim()) !== Boolean(loginPassword)) {
+      alert('กรุณากรอกทั้ง Username และ Password สำหรับเข้าสู่ระบบ หรือเว้นว่างทั้งสองช่อง');
+      return;
+    }
+
     setIsGenerating(true);
     setGeneratedCode('');
     setSaveStatus('');
@@ -234,6 +245,10 @@ export default function SetupPage() {
       formData.append('requirements', requirementsText.trim());
       formData.append('allowMutatingTests', String(allowMutatingTests));
       formData.append('humanReview', 'true');
+      if (loginUsername.trim() && loginPassword) {
+        formData.append('loginUsername', loginUsername.trim());
+        formData.append('loginPassword', loginPassword);
+      }
       files.forEach(f => formData.append('files', f));
       const idToken = await user.getIdToken();
 
@@ -614,6 +629,51 @@ export default function SetupPage() {
           placeholder="https://example.com"
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+      </div>
+
+      {/* Login credentials for the website under test */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">
+        <div>
+          <span className="block text-sm font-medium text-gray-700">บัญชีสำหรับเข้าสู่ระบบเว็บที่ทดสอบ (ไม่บังคับ)</span>
+          <span className="mt-1 block text-xs text-gray-500">
+            ใช้เข้าสู่ระบบระหว่างสำรวจหน้าเว็บ และส่งให้ชุดทดสอบตอนรันผ่าน TEST_EMAIL / TEST_PASSWORD โดยรหัสผ่านจะไม่ถูกส่งให้ AI และไม่แสดงในหน้าอื่น
+          </span>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block space-y-1">
+            <span className="block text-xs font-medium text-gray-600">Username / Email</span>
+            <input
+              type="text"
+              value={loginUsername}
+              onChange={e => setLoginUsername(e.target.value)}
+              placeholder="เช่น standard_user"
+              autoComplete="off"
+              spellCheck={false}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="block text-xs font-medium text-gray-600">Password</span>
+            <div className="relative">
+              <input
+                type={showLoginPassword ? 'text' : 'password'}
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                placeholder="รหัสผ่าน"
+                autoComplete="new-password"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowLoginPassword(value => !value)}
+                className="absolute inset-y-0 right-2 my-auto h-7 rounded px-2 text-xs text-gray-500 hover:bg-gray-100"
+                aria-label={showLoginPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
+              >
+                {showLoginPassword ? 'ซ่อน' : 'แสดง'}
+              </button>
+            </div>
+          </label>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">
