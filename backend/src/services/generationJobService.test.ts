@@ -8,8 +8,13 @@ import {
   encodeGenerationSnapshot,
   findBestSnapshotForCriterion,
   findSnapshotForPage,
+  generateCaseScript,
   runCoverageGapPass,
 } from "./generationJobService.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildInventory } from "./ecommerce/snapshotCompactor.js";
 import type { AcceptanceCriterion, TestPlan } from "../types.js";
 
 const makeGapCriterion = (id: string, text: string): AcceptanceCriterion => ({
@@ -201,4 +206,43 @@ test("buildPlannedGenerationCase includes the selected page ID when supplied", (
   }, 1, "Landing page", "snapshot-00001", "page-home");
 
   assert.equal(generationCase.pageId, "page-home");
+});
+test("generateCaseScript compiles structured cases without the script model and keeps legacy cases on it", async () => {
+  const snapshot = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "ecommerce/__fixtures__/react-cart-web/guest-catalog.txt"),
+    "utf8",
+  );
+  const inventory = buildInventory(snapshot);
+  const search = inventory.elements.find((element) => element.role === "textbox")!;
+  const plan: TestPlan = {
+    id: "case-00001", title: "ค้นหาสินค้าที่ไม่มีอยู่", description: "", type: "UI", testSteps: [], expectedResult: "",
+  };
+  const payload = { projectName: "Shop", targetUrl: "http://localhost:5173", specification: "", accessibilitySnapshot: snapshot };
+  const attempts: Array<{ passed: boolean }> = [];
+  const chatCalls: unknown[] = [];
+  const ollamaClient = {
+    chat: async (request: unknown) => {
+      chatCalls.push(request);
+      return { message: { role: "assistant", content: JSON.stringify({ id: "x", title: "t", script: "import { test, expect } from '@playwright/test';\ntest('t', async ({ page }) => {\n  await page.goto('http://localhost:5173');\n  await expect(page).toHaveURL(/localhost/);\n});\n" }) } };
+    },
+  } as never;
+  const options = { ollamaClient, metricsHooks: { onScriptAttempt: (attempt: { passed: boolean }) => attempts.push(attempt) } };
+
+  const structured = {
+    version: 1,
+    steps: [{ kind: "fill", elementId: search.id, value: "zzqxnotfound" }],
+    oracle: { kind: "textVisible", text: "ไม่พบสินค้าที่ตรงกับเงื่อนไข" },
+  };
+  const compiled = await generateCaseScript("job-1", payload, plan, { structured }, options);
+  assert.equal(chatCalls.length, 0, "no LLM call for a structured case");
+  assert.match(compiled.script, /getByRole\("textbox", \{ name: "ค้นหาสินค้าด้วยชื่อ\.\.\.", exact: true \}\)\.fill\("zzqxnotfound"\)/);
+  assert.deepEqual(attempts, [{ attempt: 1, passed: true }]);
+
+  await assert.rejects(
+    generateCaseScript("job-1", payload, plan, { structured: { ...structured, steps: [{ kind: "click", elementId: "E999" }] } }, options),
+    /could not be compiled: Element E999/,
+  );
+
+  await generateCaseScript("job-1", payload, plan, { title: plan.title }, options);
+  assert.equal(chatCalls.length, 1, "legacy cases still use the script model");
 });

@@ -11,7 +11,7 @@ import {
   sanitizePlanTraceability,
 } from "./ollamaService.js";
 import { PlanCoverageRegistry } from "./planDedup.js";
-import { TEST_PLAN_CATEGORIES, type AcceptanceCriterion, type GenerationPage, type RequirementUnit, type TestPlan } from "../types.js";
+import { TEST_PLAN_CATEGORIES, type AcceptanceCriterion, type GeneratedTestCase, type GenerationPage, type RequirementUnit, type TestPlan } from "../types.js";
 import { toProjectId } from "../utils/project.js";
 import { touchProject } from "./projectService.js";
 import { cacheCasePatch, cacheCreatedJob, cacheJobPatch, cacheTimestampNow, dropJobCache } from "./jobProgressCache.js";
@@ -19,6 +19,7 @@ import { generateAcceptanceCriteria, splitRequirementUnitsWithWarnings } from ".
 import { findBestSnapshotForCriterion, type CriterionMatchSnapshot } from "./criterionMatching.js";
 import { GenerationMetricsCollector, metricIncrements } from "./generationMetrics.js";
 import { selectSnapshotPlanner } from "./ecommerce/pipeline.js";
+import { compileStoredCase, parseStoredStructuredCase } from "./ecommerce/storedCase.js";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 export { findBestSnapshotForCriterion } from "./criterionMatching.js";
@@ -554,6 +555,42 @@ export const confirmGenerationJobPages = async (
   };
 };
 
+/**
+ * Cases planned with structured steps (GENERATION_MODE=ecommerce, `structured` field) are compiled by code;
+ * every other case uses the script model exactly as before.
+ */
+export const generateCaseScript = async (
+  jobId: string,
+  payload: Parameters<typeof generateSingleScript>[0],
+  plan: TestPlan,
+  generationCase: Record<string, unknown>,
+  options: LlmGenerationOptions,
+): Promise<GeneratedTestCase> => {
+  const structured = parseStoredStructuredCase(generationCase.structured);
+  if (!structured) {
+    return generateSingleScript(payload, plan, {
+      ...options,
+      debugContext: { jobId, stage: "script", planId: plan.id },
+    });
+  }
+  const report = (attempt: { attempt: number; passed: boolean; reason?: string }) => {
+    try {
+      options.metricsHooks?.onScriptAttempt?.(attempt);
+    } catch {
+      // Metrics must never break generation.
+    }
+  };
+  try {
+    const compiled = compileStoredCase(plan.title, structured, payload.accessibilitySnapshot);
+    report({ attempt: 1, passed: true });
+    return { id: plan.id, title: compiled.title, script: compiled.script };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    report({ attempt: 1, passed: false, reason: message });
+    throw new Error(`Plan ${plan.id} (${plan.title}) could not be compiled: ${message}`);
+  }
+};
+
 const generateAndSaveCaseScript = async (
   jobId: string,
   job: Record<string, unknown>,
@@ -583,16 +620,13 @@ const generateAndSaveCaseScript = async (
   const acceptanceCriteria = getJobAcceptanceCriteria(job);
   const accessibilitySnapshot = await getSnapshotForGenerationCase(jobId, job, generationCase);
   const plan = buildRetryTestPlan(generationCase);
-  const generated = await generateSingleScript({
+  const generated = await generateCaseScript(jobId, {
     projectName,
     targetUrl,
     specification,
     accessibilitySnapshot,
     acceptanceCriteria,
-  }, plan, {
-    ...options,
-    debugContext: { jobId, stage: "script", planId: plan.id },
-  });
+  }, plan, generationCase, options);
   const testCaseId = await saveGeneratedTestCase({
     projectName,
     url: targetUrl,
@@ -974,16 +1008,13 @@ export const retryFailedGenerationCase = async (
 
     const plan = buildRetryTestPlan(generationCase);
 
-    const generated = await generateSingleScript({
+    const generated = await generateCaseScript(jobId, {
       projectName,
       targetUrl,
       specification,
       accessibilitySnapshot,
       acceptanceCriteria,
-    }, plan, {
-      ...options,
-      debugContext: { jobId, stage: "script", planId: plan.id },
-    });
+    }, plan, generationCase, options);
     const testCaseId = await saveGeneratedTestCase({
       projectName,
       url: targetUrl,

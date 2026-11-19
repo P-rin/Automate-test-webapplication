@@ -90,6 +90,26 @@ export interface ElementInventory {
 
 export type CandidateCategory = "happy_path" | "validation" | "negative" | "boundary" | "access_control";
 
+/** A test case built by a template from the page's inventory (Phase 4). */
+export interface CandidateCase {
+  /** "C1", "C2", ... within the page. */
+  id: string;
+  /** e.g. "num.zero", "cart.remove_item". */
+  templateId: string;
+  category: CandidateCategory;
+  /** Kept even when the LLM does not select it. */
+  mandatory: boolean;
+  targetElementId: string;
+  /** Short English variant used for de-duplication, e.g. "quantity=0". */
+  inputVariant: string;
+  titleTh: string;
+  steps: StructuredStep[];
+  oracle: Oracle;
+  /** e.g. "seed_cart_one_item" (Phase 7). */
+  preconditionId?: string;
+  expectedResultTh: string;
+}
+
 /** A case the LLM proposes beyond the templates (Phase 4e), already validated against the inventory. */
 export interface ExploratoryCase {
   titleTh: string;
