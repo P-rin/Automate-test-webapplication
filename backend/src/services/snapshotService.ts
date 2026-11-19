@@ -203,7 +203,7 @@ const hasMeaningfulSnapshotTree = (snapshot: string): boolean => {
   return yamlContent.length > 0;
 };
 
-const settlePage = async (client: Client, delayMs = 400): Promise<void> => {
+export const settlePage = async (client: Client, delayMs = 400): Promise<void> => {
   await client.callTool({
     name: "browser_evaluate",
     arguments: {
@@ -448,7 +448,7 @@ const collectTestIdSection = async (client: Client): Promise<string> => {
   }
 };
 
-const collectSnapshot = async (client: Client, title: string): Promise<SnapshotStep> => {
+export const collectSnapshot = async (client: Client, title: string): Promise<SnapshotStep> => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await settlePage(client, 400 + (attempt * 200));
     const snapshotResult = await client.callTool({ name: "browser_snapshot", arguments: {} });
@@ -801,7 +801,7 @@ export const resolveLoginCredentials = (
   ? { identifier: loginCredentials.username, password: loginCredentials.password }
   : parseCredentials(specification);
 
-const attemptLogin = async (
+export const attemptLogin = async (
   client: Client,
   credentials: CredentialPair | null,
   initialSnapshot: string,

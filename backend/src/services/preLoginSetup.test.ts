@@ -34,3 +34,10 @@ test("pre-login looks for a login page beyond the target URL and site root", asy
   assert.match(PRE_LOGIN_SETUP_SOURCE, /LOGIN_LINK_PATTERN/);
   assert.doesNotMatch(PRE_LOGIN_SETUP_SOURCE, /actprin|secret_sauce|standard_user/);
 });
+
+test("pre-login also looks beyond the site root when the target URL is the root itself", async () => {
+  const { PRE_LOGIN_SETUP_SOURCE } = await import("./preLoginSetup.js");
+  // Duplicate candidates are removed up front, so the login-link/path expansion runs after the last base page.
+  assert.match(PRE_LOGIN_SETUP_SOURCE, /const candidates = \[\.\.\.new Set\(\[targetUrl, origin \+ '\/'\]\)\];/);
+  assert.match(PRE_LOGIN_SETUP_SOURCE, /if \(index === baseCount - 1\)/);
+});

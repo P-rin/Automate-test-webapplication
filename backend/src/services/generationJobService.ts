@@ -19,6 +19,7 @@ import { generateAcceptanceCriteria, splitRequirementUnitsWithWarnings } from ".
 import { findBestSnapshotForCriterion, type CriterionMatchSnapshot } from "./criterionMatching.js";
 import { GenerationMetricsCollector, metricIncrements } from "./generationMetrics.js";
 import { selectSnapshotPlanner } from "./ecommerce/pipeline.js";
+import { discoverPreconditionSnapshots } from "./ecommerce/preconditionDiscovery.js";
 import { compileStoredCase, parseStoredStructuredCase } from "./ecommerce/storedCase.js";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -1292,6 +1293,17 @@ export const processGenerateJob = async (
     discoveryFinished = true;
     coverageStopReason = discovery.stopReason ?? "";
     const snapshots = discovery.snapshots;
+    if (snapshotPlanner.mode === "ecommerce") {
+      // Phase 7: cart/checkout states with products in the cart, captured in a separate session.
+      await updateGenerationJob(jobId, { stage: "discovery", message: "Preparing cart/checkout states (precondition recipes)" });
+      try {
+        const preconditions = await discoverPreconditionSnapshots(payload.targetUrl, payload.specification, snapshots, loginCredentials);
+        for (const note of preconditions.notes) console.info(`[generation ${jobId}] ${note}`);
+        snapshots.push(...preconditions.snapshots);
+      } catch (error) {
+        console.warn(`[generation ${jobId}] precondition snapshots failed; continuing without them:`, error instanceof Error ? error.message : error);
+      }
+    }
     const snapshotIds = await persistGenerationJobSnapshots(jobId, snapshots);
     const planningBasePercentage = payload.phase === "selected-pages" ? 35 : hasSpecification ? 20 : 10;
     await updateGenerationJob(jobId, {

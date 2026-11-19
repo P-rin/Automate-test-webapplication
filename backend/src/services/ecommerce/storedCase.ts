@@ -5,6 +5,7 @@
  * which is deterministic for the same snapshot text.
  */
 import { validateGeneratedScript } from "../ollamaService.js";
+import { parsePreconditionSection } from "./preconditions.js";
 import { compileCase, type CompiledCase, type CompiledSteps } from "./scriptCompiler.js";
 import { buildInventory } from "./snapshotCompactor.js";
 import type { Oracle, StructuredStep } from "./types.js";
@@ -44,6 +45,9 @@ export const compileStoredCase = (
   preconditions?: Record<string, CompiledSteps>,
 ): CompiledCase => {
   const inventory = buildInventory(snapshot);
+  // A state snapshot (Phase 7) carries its own compiled recipe.
+  const recipe = parsePreconditionSection(snapshot);
+  const available = preconditions ?? (recipe ? { [recipe.id]: { lines: recipe.lines } } : undefined);
   const compiled = compileCase(
     {
       titleTh: title,
@@ -52,7 +56,7 @@ export const compileStoredCase = (
       ...(stored.preconditionId ? { preconditionId: stored.preconditionId } : {}),
       ...(stored.loggedOut ? { loggedOut: true } : {}),
     },
-    { inventory, fullSnapshot: snapshot, ...(preconditions ? { preconditions } : {}) },
+    { inventory, fullSnapshot: snapshot, ...(available ? { preconditions: available } : {}) },
   );
   validateGeneratedScript(compiled.script);
   return compiled;

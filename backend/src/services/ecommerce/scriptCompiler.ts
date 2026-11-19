@@ -215,6 +215,12 @@ export interface CompiledCase {
 
 const INDENT = "  ";
 
+/**
+ * Marker line in a compiled spec whose precondition changes shared account state (the cart): the runner
+ * runs such specs one at a time, since parallel tests of one account would change each other's cart.
+ */
+export const SHARED_STATE_MARKER = "// @shared-state: this test prepares the account's cart; run specs serially";
+
 /** Steps in order: precondition(s), then navigation to the page/state, then the case's own steps. */
 const orderedSteps = (testCase: CompilableCase, inventory: ElementInventory): StructuredStep[] => {
   const preconditions = testCase.steps.filter((step) => step.kind === "precondition");
@@ -249,8 +255,10 @@ export const compileCase = (testCase: CompilableCase, context: CompileContext): 
     ...oracle.after,
   ];
 
+  const usesPrecondition = steps.some((step) => step.kind === "precondition");
   const script = [
     "import { test, expect } from '@playwright/test';",
+    ...(usesPrecondition ? [SHARED_STATE_MARKER] : []),
     "",
     // Helpers of computed oracles live in the spec itself so it stays self-contained.
     ...helpers.flatMap((source) => [source, ""]),

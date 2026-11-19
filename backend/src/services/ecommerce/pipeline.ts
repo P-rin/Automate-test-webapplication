@@ -20,6 +20,7 @@ import { candidateToPlan, exploratoryToPlan, proposeExploratoryCases } from "./c
 import { selectCandidates, type AskJson } from "./candidateSelector.js";
 import { classifyInventory, resolveAmbiguousPurposes } from "./elementClassifier.js";
 import { classifyPageType } from "./pageClassifier.js";
+import { parsePreconditionSection } from "./preconditions.js";
 import { buildInventory, compactSnapshotBudget, navigationKeysOf, renderInventoryForPrompt } from "./snapshotCompactor.js";
 import { generateCandidates } from "./templates/index.js";
 
@@ -88,7 +89,9 @@ export const createEcommerceSnapshotPlanner = (config: EcommercePlannerConfig = 
     coverage = new PlanCoverageRegistry(),
     hooks = {},
   ) => {
-    const built = buildInventory(snapshot, { previouslySentNavigation: sentNavigation });
+    const recipe = parsePreconditionSection(snapshot);
+    const builtRaw = buildInventory(snapshot, { previouslySentNavigation: sentNavigation });
+    const built = recipe ? { ...builtRaw, stateLabel: recipe.stateLabel } : builtRaw;
     if (built.elements.length === 0) {
       return processSnapshotTestPlans(payload, snapshot, options, persistCase, acceptanceCriteriaOrKnownAcIds, coveredAcIds, allowMutatingTests, coverage, hooks);
     }
@@ -113,7 +116,8 @@ export const createEcommerceSnapshotPlanner = (config: EcommercePlannerConfig = 
       inventory,
       pageType,
       allowMutatingTests,
-      availablePreconditions: config.availablePreconditions ?? [],
+      availablePreconditions: [...new Set([...(config.availablePreconditions ?? []), ...(recipe ? [recipe.id] : [])])],
+      ...(recipe ? { statePreconditionId: recipe.id } : {}),
       credentials: { hasLogin: config.hasLogin },
       pageRequiresLogin: loginPaths.has(pathOf(inventory.pageUrl)),
     });

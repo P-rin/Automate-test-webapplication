@@ -3,6 +3,7 @@
  * stores, with readable Thai steps for the user and the structure (`structured`) that the compiler uses.
  * Also proposes 1–2 exploratory cases per page (Phase 4e) with the enum schema of Phase 2.
  */
+import { PRECONDITION_ITEM_COUNTS } from "./preconditions.js";
 import type { AcceptanceCriterion, TestPlan } from "../../types.js";
 import { formatCoveredCase, type CoveredCase } from "../planDedup.js";
 import { renderCriteriaForPrompt } from "../ollamaService.js";
@@ -62,7 +63,7 @@ export const describeStep = (step: StructuredStep, inventory: ElementInventory):
     case "press":
       return `กดปุ่ม ${step.key} ที่${ref(step.elementId)}`;
     case "precondition":
-      return `เตรียมสถานะ: ${step.recipeId}`;
+      return describePrecondition(step.recipeId);
   }
 };
 
@@ -73,9 +74,15 @@ interface StructuredSource {
   loggedOut?: boolean;
 }
 
+/** Thai description of a precondition recipe for the case's test steps. */
+export const describePrecondition = (recipeId: string): string => {
+  const count = (PRECONDITION_ITEM_COUNTS as Record<string, number>)[recipeId];
+  return count ? `เตรียมตะกร้า: ล้างตะกร้าแล้วเพิ่มสินค้า ${count} รายการ` : `เตรียมสถานะ: ${recipeId}`;
+};
+
 const testStepsFor = (source: StructuredSource, inventory: ElementInventory): string[] => [
   ...(source.loggedOut ? ["เริ่มโดยยังไม่ได้เข้าสู่ระบบ"] : []),
-  ...(source.preconditionId ? [`เตรียมสถานะ: ${source.preconditionId}`] : []),
+  ...(source.preconditionId ? [describePrecondition(source.preconditionId)] : []),
   ...(source.steps[0]?.kind === "goto" ? [] : inventory.navigationPath.map((step) => describeStep(step, inventory))),
   ...source.steps.map((step) => describeStep(step, inventory)),
 ];

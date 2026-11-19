@@ -52,10 +52,11 @@ export default async function preLogin(): Promise<void> {
     // The target page usually redirects to the login form; otherwise try the site root, then a
     // login link seen on those pages, then common login paths.
     const origin = new URL(targetUrl).origin;
-    const candidates = [targetUrl, origin + '/'];
+    const candidates = [...new Set([targetUrl, origin + '/'])];
+    const baseCount = candidates.length;
     const tried = new Set<string>();
     let foundForm = false;
-    for (let index = 0; index < candidates.length && index < 8; index += 1) {
+    for (let index = 0; index < candidates.length && tried.size < 8; index += 1) {
       const url = candidates[index];
       if (tried.has(url)) continue;
       tried.add(url);
@@ -67,7 +68,9 @@ export default async function preLogin(): Promise<void> {
       } catch {
         // No login form here; try the next candidate.
       }
-      if (index === 1) {
+      // After the target page and the site root (one page when they are the same URL), add the login links
+      // seen there and the common login paths.
+      if (index === baseCount - 1) {
         const loginLinks = await page.evaluate((loginPattern) => {
           const pattern = new RegExp(loginPattern, 'i');
           return Array.from(document.querySelectorAll('a[href]'))
