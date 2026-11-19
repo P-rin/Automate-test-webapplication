@@ -1,0 +1,62 @@
+### Page
+- Page URL: https://www.saucedemo.com/checkout-step-one.html
+- Page Title: Swag Labs
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [data-test="firstName"] <input> "First Name"
+- [data-test="lastName"] <input> "Last Name"
+- [data-test="postalCode"] <input> "Zip/Postal Code"
+- [data-test="cancel"] <button> "Cancel"
+- [data-test="continue"] <input> "Continue"
+- [data-test="shopping-cart-link"] <a> "2"
+- [data-test="social-x"] <a> "X"
+- [data-test="social-facebook"] <a> "Facebook"
+- [data-test="social-linkedin"] <a> "LinkedIn"
+- [id="page_wrapper"] <div> "Open Menu Swag Labs 2 Checkout"
+- [id="contents_wrapper"] <div> "Open Menu Swag Labs 2 Checkout"
+- [data-test="header-container"] <header> "Open Menu Swag Labs 2 Checkout"
+- [data-test="primary-header"] <div> "Open Menu Swag Labs 2"
+- [id="menu_button_container"] <div> "Open Menu"
+- [id="shopping_cart_container"] <div> "2"
+- [data-test="shopping-cart-badge"] <span> "2"
+- [data-test="secondary-header"] <div> "Checkout: Your Information"
+- [data-test="title"] <span> "Checkout: Your Information"
+- [data-test="checkout-info-container"] <div> "Cancel"
+- [data-test="footer"] <footer> "X Facebook LinkedIn © 2026 Sau"
+- [data-test="footer-copy"] <div> "© 2026 Sauce Labs. All Rights "
+- [data-test="open-menu"] <img>
+### Snapshot
+```yaml
+- generic [ref=f10e64]:
+  - generic [ref=f10e65]:
+    - banner [ref=f10e66]:
+      - generic [ref=f10e67]:
+        - generic [ref=f10e68]:
+          - button "Open Menu" [ref=f10e69] [cursor=pointer]
+          - img "Open Menu" [ref=f10e70]
+        - generic [ref=f10e71]: Swag Labs
+        - button "Cart, 2 items" [ref=f10e74]:
+          - generic [ref=f10e75]: "2"
+      - generic [ref=f10e76]: "Checkout: Your Information"
+    - main [ref=f10e78]:
+      - form "Checkout information" [ref=f10e80]:
+        - generic [ref=f10e81]:
+          - textbox "First Name" [ref=f10e83]
+          - textbox "Last Name" [ref=f10e85]
+          - textbox "Zip/Postal Code" [ref=f10e87]
+        - generic [ref=f10e89]:
+          - button "Cancel" [ref=f10e90] [cursor=pointer]
+          - button "Continue" [ref=f10e91] [cursor=pointer]
+  - contentinfo [ref=f10e92]:
+    - list [ref=f10e93]:
+      - listitem [ref=f10e94]:
+        - link "X" [ref=f10e95] [cursor=pointer]:
+          - /url: https://x.com/saucelabs
+      - listitem [ref=f10e96]:
+        - link "Facebook" [ref=f10e97] [cursor=pointer]:
+          - /url: https://www.facebook.com/saucelabs
+      - listitem [ref=f10e98]:
+        - link "LinkedIn" [ref=f10e99] [cursor=pointer]:
+          - /url: https://www.linkedin.com/company/sauce-labs/
+    - generic [ref=f10e100]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
+```

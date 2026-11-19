@@ -1,0 +1,204 @@
+### Page
+- Page URL: http://localhost:5173/products
+- Page Title: ร้านค้าออนไลน์
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [id="root"] <div> "เข้าสู่ระบบในชื่อ <redacted>"
+- [id="storefront"] <div> "เลือกซื้อสินค้า เลือกสินค้าที่"
+### Snapshot
+```yaml
+- main [ref=f8e3]:
+  - generic [ref=f8e4]:
+    - generic [ref=f8e5]:
+      - generic [ref=f8e6]:
+        - paragraph [ref=f8e7]: เข้าสู่ระบบในชื่อ
+        - paragraph [ref=f8e8]: test+auto@example.com
+      - navigation [ref=f8e9]:
+        - link "หน้าแรก" [ref=f8e10] [cursor=pointer]:
+          - /url: /
+        - link "สินค้าทั้งหมด" [ref=f8e11] [cursor=pointer]:
+          - /url: /products
+        - link "บัญชีของฉัน" [ref=f8e12] [cursor=pointer]:
+          - /url: /profile
+        - link "รายการโปรด" [ref=f8e13] [cursor=pointer]:
+          - /url: /whitelist
+        - link "ตะกร้าสินค้า" [ref=f8e14] [cursor=pointer]:
+          - /url: /cart
+        - link "คำสั่งซื้อ" [ref=f8e15] [cursor=pointer]:
+          - /url: /orders
+    - generic [ref=f8e19]:
+      - generic [ref=f8e20]:
+        - heading "เลือกซื้อสินค้า" [level=1] [ref=f8e21]
+        - paragraph [ref=f8e22]: เลือกสินค้าที่ใช่สำหรับคุณ
+      - generic [ref=f8e23]:
+        - textbox "ค้นหาสินค้าด้วยชื่อ..." [ref=f8e24]
+        - combobox [ref=f8e25]:
+          - option "ทุกหมวดหมู่" [selected]
+          - option "อุปกรณ์อิเล็กทรอนิกส์"
+          - option "เฟอร์นิเจอร์"
+          - option "เกมมิ่ง"
+          - option "นั่นสิ"
+      - generic [ref=f8e27]:
+        - article [ref=f8e28]:
+          - link "AirPods Pro 2 USB-C -11%" [ref=f8e29] [cursor=pointer]:
+            - /url: /products/prd_airpods_pro_2_usb_c
+            - img "AirPods Pro 2 USB-C" [ref=f8e30]
+            - generic [ref=f8e31]: "-11%"
+          - generic [ref=f8e32]:
+            - generic [ref=f8e33]:
+              - paragraph [ref=f8e34]: AirPods Pro 2 USB-C
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e35]: ♡
+            - paragraph [ref=f8e36]:
+              - text: ★★★★★
+              - generic [ref=f8e37]: (421)
+            - generic [ref=f8e38]:
+              - paragraph [ref=f8e39]: ฿7,990
+              - paragraph [ref=f8e40]: ฿8,990
+            - generic [ref=f8e41]:
+              - paragraph [ref=f8e42]: คงเหลือ 43
+              - button "เพิ่มลงตะกร้า" [ref=f8e43]
+        - article [ref=f8e44]:
+          - link "Dell XPS 13 Plus -8%" [ref=f8e45] [cursor=pointer]:
+            - /url: /products/prd_dell_xps_13_plus
+            - img "Dell XPS 13 Plus" [ref=f8e46]
+            - generic [ref=f8e47]: "-8%"
+          - generic [ref=f8e48]:
+            - generic [ref=f8e49]:
+              - paragraph [ref=f8e50]: Dell XPS 13 Plus
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e51]: ♡
+            - paragraph [ref=f8e52]:
+              - text: ★★★★★
+              - generic [ref=f8e53]: (84)
+            - generic [ref=f8e54]:
+              - paragraph [ref=f8e55]: ฿45,900
+              - paragraph [ref=f8e56]: ฿49,900
+            - generic [ref=f8e57]:
+              - paragraph [ref=f8e58]: คงเหลือ 11
+              - button "เพิ่มลงตะกร้า" [ref=f8e59]
+        - article [ref=f8e60]:
+          - link "ErgoFlex Pro Office Chair -18%" [ref=f8e61] [cursor=pointer]:
+            - /url: /products/prd_office_chair_ergoflex
+            - img "ErgoFlex Pro Office Chair" [ref=f8e62]
+            - generic [ref=f8e63]: "-18%"
+          - generic [ref=f8e64]:
+            - generic [ref=f8e65]:
+              - paragraph [ref=f8e66]: ErgoFlex Pro Office Chair
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e67]: ♡
+            - paragraph [ref=f8e68]:
+              - text: ★★★★
+              - generic [ref=f8e69]: (52)
+            - generic [ref=f8e70]:
+              - paragraph [ref=f8e71]: ฿6,590
+              - paragraph [ref=f8e72]: ฿7,990
+            - generic [ref=f8e73]:
+              - paragraph [ref=f8e74]: คงเหลือ 0
+              - button "สินค้าหมด" [disabled] [ref=f8e75]
+        - article [ref=f8e76]:
+          - link "Galaxy S24 Ultra 512GB -9%" [ref=f8e77] [cursor=pointer]:
+            - /url: /products/prd_galaxy_s24_ultra_512
+            - img "Galaxy S24 Ultra 512GB" [ref=f8e78]
+            - generic [ref=f8e79]: "-9%"
+          - generic [ref=f8e80]:
+            - generic [ref=f8e81]:
+              - paragraph [ref=f8e82]: Galaxy S24 Ultra 512GB
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e83]: ♡
+            - paragraph [ref=f8e84]:
+              - text: ★★★★★
+              - generic [ref=f8e85]: (188)
+            - generic [ref=f8e86]:
+              - paragraph [ref=f8e87]: ฿42,900
+              - paragraph [ref=f8e88]: ฿46,900
+            - generic [ref=f8e89]:
+              - paragraph [ref=f8e90]: คงเหลือ 23
+              - button "เพิ่มลงตะกร้า" [ref=f8e91]
+        - article [ref=f8e92]:
+          - link "iPhone 15 Pro 256GB -8%" [ref=f8e93] [cursor=pointer]:
+            - /url: /products/prd_iphone_15_pro_256_black
+            - img "iPhone 15 Pro 256GB" [ref=f8e94]
+            - generic [ref=f8e95]: "-8%"
+          - generic [ref=f8e96]:
+            - generic [ref=f8e97]:
+              - paragraph [ref=f8e98]: iPhone 15 Pro 256GB
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e99]: ♡
+            - paragraph [ref=f8e100]:
+              - text: ★★★★★
+              - generic [ref=f8e101]: (312)
+            - generic [ref=f8e102]:
+              - paragraph [ref=f8e103]: ฿44,900
+              - paragraph [ref=f8e104]: ฿48,900
+            - generic [ref=f8e105]:
+              - paragraph [ref=f8e106]: คงเหลือ 34
+              - button "เพิ่มลงตะกร้า" [ref=f8e107]
+        - article [ref=f8e108]:
+          - link "Logitech G502 X -17%" [ref=f8e109] [cursor=pointer]:
+            - /url: /products/prd_gaming_mouse_g502x
+            - img "Logitech G502 X" [ref=f8e110]
+            - generic [ref=f8e111]: "-17%"
+          - generic [ref=f8e112]:
+            - generic [ref=f8e113]:
+              - paragraph [ref=f8e114]: Logitech G502 X
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e115]: ♡
+            - paragraph [ref=f8e116]:
+              - text: ★★★★★
+              - generic [ref=f8e117]: (96)
+            - generic [ref=f8e118]:
+              - paragraph [ref=f8e119]: ฿2,490
+              - paragraph [ref=f8e120]: ฿2,990
+            - generic [ref=f8e121]:
+              - paragraph [ref=f8e122]: คงเหลือ 57
+              - button "เพิ่มลงตะกร้า" [ref=f8e123]
+        - article [ref=f8e124]:
+          - link "MacBook Air M3 13-inch -7%" [ref=f8e125] [cursor=pointer]:
+            - /url: /products/prd_macbook_air_m3_13
+            - img "MacBook Air M3 13-inch" [ref=f8e126]
+            - generic [ref=f8e127]: "-7%"
+          - generic [ref=f8e128]:
+            - generic [ref=f8e129]:
+              - paragraph [ref=f8e130]: MacBook Air M3 13-inch
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e131]: ♡
+            - paragraph [ref=f8e132]:
+              - text: ★★★★★
+              - generic [ref=f8e133]: (127)
+            - generic [ref=f8e134]:
+              - paragraph [ref=f8e135]: ฿38,900
+              - paragraph [ref=f8e136]: ฿41,900
+            - generic [ref=f8e137]:
+              - paragraph [ref=f8e138]: คงเหลือ 16
+              - button "เพิ่มลงตะกร้า" [ref=f8e139]
+        - article [ref=f8e140]:
+          - link "Sony WH-1000XM5 -15%" [ref=f8e141] [cursor=pointer]:
+            - /url: /products/prd_sony_wh1000xm5_black
+            - img "Sony WH-1000XM5" [ref=f8e142]
+            - generic [ref=f8e143]: "-15%"
+          - generic [ref=f8e144]:
+            - generic [ref=f8e145]:
+              - paragraph [ref=f8e146]: Sony WH-1000XM5
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e147]: ♡
+            - paragraph [ref=f8e148]:
+              - text: ★★★★★
+              - generic [ref=f8e149]: (203)
+            - generic [ref=f8e150]:
+              - paragraph [ref=f8e151]: ฿10,990
+              - paragraph [ref=f8e152]: ฿12,990
+            - generic [ref=f8e153]:
+              - paragraph [ref=f8e154]: คงเหลือ 28
+              - button "เพิ่มลงตะกร้า" [ref=f8e155]
+        - article [ref=f8e156]:
+          - link "ทดสอบเพิ่มสินค้า -100%" [ref=f8e157] [cursor=pointer]:
+            - /url: /products/9KkYgn7tiqrfZ1zXE9Lh
+            - img "ทดสอบเพิ่มสินค้า" [ref=f8e158]
+            - generic [ref=f8e159]: "-100%"
+          - generic [ref=f8e160]:
+            - generic [ref=f8e161]:
+              - paragraph [ref=f8e162]: ทดสอบเพิ่มสินค้า
+              - button "เพิ่มหรือลบรายการโปรด" [ref=f8e163]: ♡
+            - paragraph [ref=f8e164]:
+              - text: ★
+              - generic [ref=f8e165]: (0)
+            - generic [ref=f8e166]:
+              - paragraph [ref=f8e167]: ฿0
+              - paragraph [ref=f8e168]: ฿100
+            - generic [ref=f8e169]:
+              - paragraph [ref=f8e170]: คงเหลือ 0
+              - button "สินค้าหมด" [disabled] [ref=f8e171]
+```

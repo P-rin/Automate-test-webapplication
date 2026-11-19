@@ -1,0 +1,74 @@
+### Page
+- Page URL: https://www.saucedemo.com/cart.html
+- Page Title: Swag Labs
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [data-test="remove-sauce-labs-backpack"] <button> "Remove"
+- [data-test="continue-shopping"] <button> "Continue Shopping"
+- [data-test="checkout"] <button> "Checkout"
+- [data-test="shopping-cart-link"] <a> "1"
+- [data-test="item-4-title-link"] <a> "Sauce Labs Backpack"
+- [data-test="social-x"] <a> "X"
+- [data-test="social-facebook"] <a> "Facebook"
+- [data-test="social-linkedin"] <a> "LinkedIn"
+- [data-test="header-container"] <header> "Open Menu Swag Labs 1 Your Car"
+- [data-test="primary-header"] <div> "Open Menu Swag Labs 1"
+- [id="menu_button_container"] <div> "Open Menu"
+- [id="shopping_cart_container"] <div> "1"
+- [data-test="shopping-cart-badge"] <span> "1"
+- [data-test="secondary-header"] <div> "Your Cart"
+- [data-test="title"] <span> "Your Cart"
+- [data-test="cart-contents-container"] <div> "QTYDescription 1 Sauce Labs Ba"
+- [data-test="cart-list"] <div> "QTYDescription 1 Sauce Labs Ba"
+- [data-test="cart-quantity-label"] <div> "QTY"
+- [data-test="cart-desc-label"] <div> "Description"
+- [data-test="inventory-item"] <div> "1 Sauce Labs Backpack carry.al"
+- [data-test="item-quantity"] <div> "1"
+- [data-test="inventory-item-name"] <div> "Sauce Labs Backpack"
+- [data-test="inventory-item-desc"] <div> "carry.allTheThings() with the "
+- [data-test="inventory-item-price"] <div> "$29.99"
+- [data-test="footer"] <footer> "X Facebook LinkedIn © 2026 Sau"
+- (2 more omitted)
+### Snapshot
+```yaml
+- generic [ref=f6e3]:
+  - generic [ref=f6e4]:
+    - banner [ref=f6e5]:
+      - generic [ref=f6e6]:
+        - generic [ref=f6e7]:
+          - button "Open Menu" [ref=f6e8] [cursor=pointer]
+          - img "Open Menu" [ref=f6e9]
+        - generic [ref=f6e22]: Swag Labs
+        - button "Cart, 1 items" [ref=f6e25]:
+          - generic [ref=f6e26]: "1"
+      - generic [ref=f6e27]: Your Cart
+    - main [ref=f6e29]:
+      - generic [ref=f6e30]:
+        - generic [ref=f6e31]:
+          - generic [ref=f6e32]: QTY
+          - generic [ref=f6e33]: Description
+          - generic [ref=f6e34]:
+            - generic [ref=f6e35]: "1"
+            - generic [ref=f6e36]:
+              - button "View details for Sauce Labs Backpack" [ref=f6e37] [cursor=pointer]:
+                - generic [ref=f6e38]: Sauce Labs Backpack
+              - generic [ref=f6e39]: carry.allTheThings() with the sleek, streamlined Sly Pack that melds uncompromising style with unequaled laptop and tablet protection.
+              - generic [ref=f6e40]:
+                - generic [ref=f6e41]: $29.99
+                - button "Remove" [ref=f6e42] [cursor=pointer]
+        - generic [ref=f6e43]:
+          - button "Continue Shopping" [ref=f6e44] [cursor=pointer]
+          - button "Checkout" [ref=f6e45] [cursor=pointer]
+  - contentinfo [ref=f6e46]:
+    - list [ref=f6e47]:
+      - listitem [ref=f6e48]:
+        - link "X" [ref=f6e49] [cursor=pointer]:
+          - /url: https://x.com/saucelabs
+      - listitem [ref=f6e50]:
+        - link "Facebook" [ref=f6e51] [cursor=pointer]:
+          - /url: https://www.facebook.com/saucelabs
+      - listitem [ref=f6e52]:
+        - link "LinkedIn" [ref=f6e53] [cursor=pointer]:
+          - /url: https://www.linkedin.com/company/sauce-labs/
+    - generic [ref=f6e54]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
+```

@@ -1,0 +1,57 @@
+### Page
+- Page URL: http://localhost:5173/cart
+- Page Title: ร้านค้าออนไลน์
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [id="root"] <div> "เข้าสู่ระบบในชื่อ <redacted>"
+### Snapshot
+```yaml
+- main [ref=f14e3]:
+  - generic [ref=f14e4]:
+    - generic [ref=f14e5]:
+      - generic [ref=f14e6]:
+        - paragraph [ref=f14e7]: เข้าสู่ระบบในชื่อ
+        - paragraph [ref=f14e8]: test+auto@example.com
+      - navigation [ref=f14e9]:
+        - link "หน้าแรก" [ref=f14e10] [cursor=pointer]:
+          - /url: /
+        - link "สินค้าทั้งหมด" [ref=f14e11] [cursor=pointer]:
+          - /url: /products
+        - link "บัญชีของฉัน" [ref=f14e12] [cursor=pointer]:
+          - /url: /profile
+        - link "รายการโปรด" [ref=f14e13] [cursor=pointer]:
+          - /url: /whitelist
+        - link "ตะกร้าสินค้า" [ref=f14e14] [cursor=pointer]:
+          - /url: /cart
+        - link "คำสั่งซื้อ" [ref=f14e15] [cursor=pointer]:
+          - /url: /orders
+    - generic [ref=f14e20]:
+      - generic [ref=f14e21]:
+        - heading "ตะกร้าสินค้า" [level=1] [ref=f14e22]
+        - paragraph [ref=f14e23]: จัดการสินค้าและตรวจสอบยอดชำระ
+      - generic [ref=f14e24]:
+        - article [ref=f14e26]:
+          - img "AirPods Pro 2 USB-C" [ref=f14e27]
+          - generic [ref=f14e28]:
+            - paragraph [ref=f14e29]: AirPods Pro 2 USB-C
+            - paragraph [ref=f14e30]: ฿7,990 ต่อชิ้น
+            - paragraph [ref=f14e31]: "สินค้าคงเหลือ: 43"
+          - generic [ref=f14e32]:
+            - generic [ref=f14e33]:
+              - button "-" [disabled] [ref=f14e34]
+              - generic [ref=f14e35]: "1"
+              - button "+" [ref=f14e36]
+            - paragraph [ref=f14e37]: ฿7,990
+            - button "ลบสินค้า" [ref=f14e38]
+        - complementary [ref=f14e39]:
+          - heading "สรุปคำสั่งซื้อ" [level=2] [ref=f14e40]
+          - generic [ref=f14e41]:
+            - paragraph [ref=f14e42]:
+              - generic [ref=f14e43]: จำนวนสินค้าทั้งหมด
+              - generic [ref=f14e44]: "1"
+            - paragraph [ref=f14e45]:
+              - generic [ref=f14e46]: ยอดรวม
+              - generic [ref=f14e47]: ฿7,990
+          - link "ดำเนินการชำระเงิน" [ref=f14e48] [cursor=pointer]:
+            - /url: /checkout
+```

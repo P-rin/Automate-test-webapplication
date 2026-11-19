@@ -1,0 +1,51 @@
+### Page
+- Page URL: http://localhost:5173/login
+- Page Title: ร้านค้าออนไลน์
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [id="root"] <div> "กำลังใช้งานในฐานะ Guest หน้าแร"
+### Snapshot
+```yaml
+- main [ref=f7e3]:
+  - generic [ref=f7e4]:
+    - generic [ref=f7e5]:
+      - generic [ref=f7e6]:
+        - paragraph [ref=f7e7]: กำลังใช้งานในฐานะ
+        - paragraph [ref=f7e8]: Guest
+      - navigation [ref=f7e9]:
+        - link "หน้าแรก" [ref=f7e10] [cursor=pointer]:
+          - /url: /
+        - link "สินค้าทั้งหมด" [ref=f7e11] [cursor=pointer]:
+          - /url: /products
+        - link "บัญชีของฉัน" [ref=f7e12] [cursor=pointer]:
+          - /url: /profile
+        - link "รายการโปรด" [ref=f7e13] [cursor=pointer]:
+          - /url: /whitelist
+        - link "ตะกร้าสินค้า" [ref=f7e14] [cursor=pointer]:
+          - /url: /cart
+        - link "คำสั่งซื้อ" [ref=f7e15] [cursor=pointer]:
+          - /url: /orders
+        - link "เข้าสู่ระบบ" [ref=f7e16] [cursor=pointer]:
+          - /url: /login
+        - link "สมัครสมาชิก" [ref=f7e17] [cursor=pointer]:
+          - /url: /register
+    - generic [ref=f7e20]:
+      - heading "ยินดีต้อนรับกลับมา" [level=1] [ref=f7e21]
+      - paragraph [ref=f7e22]: เข้าสู่ระบบด้วยอีเมลของคุณ
+      - generic [ref=f7e23]:
+        - generic [ref=f7e24]:
+          - text: อีเมล
+          - textbox "อีเมล" [ref=f7e25]:
+            - /placeholder: กรอกอีเมลของคุณ
+        - generic [ref=f7e26]:
+          - text: รหัสผ่าน
+          - textbox "รหัสผ่าน" [ref=f7e27]:
+            - /placeholder: ••••••••
+        - button "เข้าสู่ระบบ" [ref=f7e28]
+      - paragraph [ref=f7e29]:
+        - text: ยังไม่มีบัญชีใช่ไหม?
+        - link "สมัครสมาชิก" [ref=f7e30] [cursor=pointer]:
+          - /url: /register
+      - link "กลับไปเลือกชมสินค้า" [ref=f7e31] [cursor=pointer]:
+        - /url: /products#storefront
+```

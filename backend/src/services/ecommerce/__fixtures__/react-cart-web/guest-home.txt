@@ -1,0 +1,69 @@
+### Page
+- Page URL: http://localhost:5173/
+- Page Title: ร้านค้าออนไลน์
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [id="root"] <div> "กำลังใช้งานในฐานะ Guest หน้าแร"
+### Snapshot
+```yaml
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - paragraph [ref=e7]: กำลังใช้งานในฐานะ
+        - paragraph [ref=e8]: Guest
+      - navigation [ref=e9]:
+        - link "หน้าแรก" [ref=e10] [cursor=pointer]:
+          - /url: /
+        - link "สินค้าทั้งหมด" [ref=e11] [cursor=pointer]:
+          - /url: /products
+        - link "บัญชีของฉัน" [ref=e12] [cursor=pointer]:
+          - /url: /profile
+        - link "รายการโปรด" [ref=e13] [cursor=pointer]:
+          - /url: /whitelist
+        - link "ตะกร้าสินค้า" [ref=e14] [cursor=pointer]:
+          - /url: /cart
+        - link "คำสั่งซื้อ" [ref=e15] [cursor=pointer]:
+          - /url: /orders
+        - link "เข้าสู่ระบบ" [ref=e16] [cursor=pointer]:
+          - /url: /login
+        - link "สมัครสมาชิก" [ref=e17] [cursor=pointer]:
+          - /url: /register
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e22]:
+            - link "หน้าแรก Nimman Corner" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]: "N"
+              - generic [ref=e25]: Nimman Corner
+            - generic [ref=e26]:
+              - link "ดูสินค้าทั้งหมด" [ref=e27] [cursor=pointer]:
+                - /url: /products#storefront
+              - link "เข้าสู่ระบบ" [ref=e28] [cursor=pointer]:
+                - /url: /login
+          - generic [ref=e29]:
+            - paragraph [ref=e30]: CURATED GOODS · CHIANG MAI
+            - heading "ของดีที่คัดมา เพื่อทุกวันของคุณ" [level=1] [ref=e31]: ของดีที่คัดมาเพื่อทุกวันของคุณ
+            - paragraph [ref=e32]: เลือกของใช้ดี ๆ ของฝากน่ารัก และของขวัญพิเศษจากร้าน Nimman Corner คัดสรรด้วยใจ ส่งตรงถึงบ้านคุณ
+            - link "เลือกซื้อสินค้า" [ref=e33] [cursor=pointer]:
+              - /url: /products#storefront
+              - text: เลือกซื้อสินค้า
+              - generic [ref=e34]: ↗
+        - generic [ref=e41]:
+          - generic [ref=e42]:
+            - paragraph [ref=e43]: NIMMAN EDIT
+            - paragraph [ref=e44]: ค้นพบของดีใกล้บ้าน
+          - generic [ref=e45]: ✦
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - paragraph [ref=e48]: ร้านค้า
+          - paragraph [ref=e49]: Nimman Corner
+        - generic [ref=e50]:
+          - paragraph [ref=e51]: ติดต่อ
+          - link "081-234-5678" [ref=e52] [cursor=pointer]:
+            - /url: tel:0812345678
+        - generic [ref=e53]:
+          - paragraph [ref=e54]: ที่ตั้ง
+          - paragraph [ref=e55]: 44/2 ถ.นิมมานเหมินท์ ตำบลสุเทพ อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50200
+```

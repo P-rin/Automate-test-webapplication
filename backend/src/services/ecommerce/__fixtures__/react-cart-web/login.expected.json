@@ -1,0 +1,12 @@
+{
+  "$comment": "Expected results for unit tests of the e-commerce pipeline. pageType: Phase 4 classifier; compactor: Phase 1 (mustKeep = substrings the compact prompt must contain).",
+  "pageType": "login",
+  "compactor": {
+    "repeatedGroups": [],
+    "mustKeep": [
+      "textbox \"อีเมล\"",
+      "textbox \"รหัสผ่าน\"",
+      "button \"เข้าสู่ระบบ\""
+    ]
+  }
+}

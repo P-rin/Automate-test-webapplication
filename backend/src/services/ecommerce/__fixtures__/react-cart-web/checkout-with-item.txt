@@ -1,0 +1,95 @@
+### Page
+- Page URL: http://localhost:5173/checkout
+- Page Title: ร้านค้าออนไลน์
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [id="root"] <div> "เข้าสู่ระบบในชื่อ <redacted>"
+### Snapshot
+```yaml
+- main [ref=f14e3]:
+  - generic [ref=f14e4]:
+    - generic [ref=f14e5]:
+      - generic [ref=f14e6]:
+        - paragraph [ref=f14e7]: เข้าสู่ระบบในชื่อ
+        - paragraph [ref=f14e8]: test+auto@example.com
+      - navigation [ref=f14e9]:
+        - link "หน้าแรก" [ref=f14e10] [cursor=pointer]:
+          - /url: /
+        - link "สินค้าทั้งหมด" [ref=f14e11] [cursor=pointer]:
+          - /url: /products
+        - link "บัญชีของฉัน" [ref=f14e12] [cursor=pointer]:
+          - /url: /profile
+        - link "รายการโปรด" [ref=f14e13] [cursor=pointer]:
+          - /url: /whitelist
+        - link "ตะกร้าสินค้า" [ref=f14e14] [cursor=pointer]:
+          - /url: /cart
+        - link "คำสั่งซื้อ" [ref=f14e15] [cursor=pointer]:
+          - /url: /orders
+    - generic [ref=f14e49]:
+      - generic [ref=f14e50]:
+        - generic [ref=f14e51]:
+          - heading "ยืนยันคำสั่งซื้อ" [level=1] [ref=f14e52]
+          - paragraph [ref=f14e53]: ตรวจสอบที่อยู่จัดส่งและเลือกวิธีชำระเงิน
+        - generic [ref=f14e54]:
+          - generic [ref=f14e55]:
+            - text: ชื่อผู้รับ
+            - textbox "ชื่อผู้รับ" [ref=f14e56]: Test User
+          - generic [ref=f14e57]:
+            - text: เบอร์โทร
+            - textbox "เบอร์โทร" [ref=f14e58]: 0800000000
+          - generic [ref=f14e59]:
+            - text: ที่อยู่
+            - textbox "ที่อยู่" [ref=f14e60]
+          - generic [ref=f14e61]:
+            - text: เขต/อำเภอ
+            - textbox "เขต/อำเภอ" [ref=f14e62]
+          - generic [ref=f14e63]:
+            - text: จังหวัด
+            - textbox "จังหวัด" [ref=f14e64]
+          - generic [ref=f14e65]:
+            - text: รหัสไปรษณีย์
+            - textbox "รหัสไปรษณีย์" [ref=f14e66]
+          - generic [ref=f14e67]:
+            - text: ประเทศ
+            - textbox "ประเทศ" [ref=f14e68]
+        - generic [ref=f14e69]:
+          - paragraph [ref=f14e70]: วิธีชำระเงิน
+          - generic [ref=f14e71]:
+            - radio "โอนเงินผ่านธนาคาร" [checked] [ref=f14e72]
+            - generic [ref=f14e73]: โอนเงินผ่านธนาคาร
+          - generic [ref=f14e74]:
+            - radio "บัตรเครดิต" [ref=f14e75]
+            - generic [ref=f14e76]: บัตรเครดิต
+          - generic [ref=f14e77]:
+            - radio "ชำระเงินปลายทาง" [ref=f14e78]
+            - generic [ref=f14e79]: ชำระเงินปลายทาง
+        - generic [ref=f14e80]:
+          - text: หมายเหตุเพิ่มเติม
+          - textbox "หมายเหตุเพิ่มเติม" [ref=f14e81]:
+            - /placeholder: เช่น ฝากไว้ที่นิติบุคคล
+        - generic [ref=f14e82]:
+          - link "กลับไปตะกร้า" [ref=f14e83] [cursor=pointer]:
+            - /url: /cart
+          - button "ยืนยันและชำระเงิน" [disabled] [ref=f14e84]
+      - complementary [ref=f14e85]:
+        - heading "สรุปคำสั่งซื้อ" [level=2] [ref=f14e86]
+        - generic [ref=f14e88]:
+          - paragraph [ref=f14e89]: AirPods Pro 2 USB-C
+          - paragraph [ref=f14e90]: 1 x ฿7,990
+        - generic [ref=f14e91]:
+          - paragraph [ref=f14e92]:
+            - generic [ref=f14e93]: ยอดรวมสินค้า
+            - generic [ref=f14e94]: ฿7,990
+          - paragraph [ref=f14e95]:
+            - generic [ref=f14e96]: ค่าจัดส่ง
+            - generic [ref=f14e97]: ฿0
+          - paragraph [ref=f14e98]:
+            - generic [ref=f14e99]: ภาษี (7%)
+            - generic [ref=f14e100]: ฿559.3
+          - paragraph [ref=f14e101]:
+            - generic [ref=f14e102]: ส่วนลด
+            - generic [ref=f14e103]: "-฿0"
+          - paragraph [ref=f14e104]:
+            - generic [ref=f14e105]: ยอดสุทธิ
+            - generic [ref=f14e106]: ฿8,549.3
+```

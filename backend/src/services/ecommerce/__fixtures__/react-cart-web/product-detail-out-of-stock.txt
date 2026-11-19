@@ -1,0 +1,63 @@
+### Page
+- Page URL: http://localhost:5173/products/prd_office_chair_ergoflex
+- Page Title: ร้านค้าออนไลน์
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [id="root"] <div> "เข้าสู่ระบบในชื่อ <redacted>"
+### Snapshot
+```yaml
+- main [ref=f10e3]:
+  - generic [ref=f10e4]:
+    - generic [ref=f10e5]:
+      - generic [ref=f10e6]:
+        - paragraph [ref=f10e7]: เข้าสู่ระบบในชื่อ
+        - paragraph [ref=f10e8]: test+auto@example.com
+      - navigation [ref=f10e9]:
+        - link "หน้าแรก" [ref=f10e10] [cursor=pointer]:
+          - /url: /
+        - link "สินค้าทั้งหมด" [ref=f10e11] [cursor=pointer]:
+          - /url: /products
+        - link "บัญชีของฉัน" [ref=f10e12] [cursor=pointer]:
+          - /url: /profile
+        - link "รายการโปรด" [ref=f10e13] [cursor=pointer]:
+          - /url: /whitelist
+        - link "ตะกร้าสินค้า" [ref=f10e14] [cursor=pointer]:
+          - /url: /cart
+        - link "คำสั่งซื้อ" [ref=f10e15] [cursor=pointer]:
+          - /url: /orders
+    - generic [ref=f10e19]:
+      - link "← กลับไปหน้าสินค้า" [ref=f10e20] [cursor=pointer]:
+        - /url: /products
+      - generic [ref=f10e21]:
+        - generic [ref=f10e22]:
+          - img "ErgoFlex Pro Office Chair" [ref=f10e24]
+          - generic [ref=f10e25]:
+            - button [ref=f10e26]:
+              - img "รูปสินค้า 1" [ref=f10e27]
+            - button [ref=f10e28]:
+              - img "รูปสินค้า 2" [ref=f10e29]
+        - generic [ref=f10e30]:
+          - heading "ErgoFlex Pro Office Chair" [level=1] [ref=f10e31]
+          - paragraph [ref=f10e32]: เก้าอี้ทำงานรองรับสรีระ นั่งนานไม่ปวดหลัง
+          - generic [ref=f10e33]:
+            - paragraph [ref=f10e34]: รายละเอียดสินค้า
+            - generic [ref=f10e35]:
+              - paragraph [ref=f10e36]:
+                - generic [ref=f10e37]: "รองรับน้ำหนักสูงสุด:"
+                - text: 120kg
+              - paragraph [ref=f10e38]:
+                - generic [ref=f10e39]: "วัสดุ:"
+                - text: Mesh + Aluminum
+              - paragraph [ref=f10e40]:
+                - generic [ref=f10e41]: "สี:"
+                - text: Charcoal
+              - paragraph [ref=f10e42]:
+                - generic [ref=f10e43]: "การรับประกัน:"
+                - text: 3 years
+          - paragraph [ref=f10e44]: ฿6,590
+          - paragraph [ref=f10e45]: สินค้าหมด
+          - generic [ref=f10e46]:
+            - button "♡ เพิ่มรายการโปรด" [ref=f10e47]
+            - spinbutton [disabled] [ref=f10e48]: "1"
+          - button "สินค้าหมด" [disabled] [ref=f10e49]
+```

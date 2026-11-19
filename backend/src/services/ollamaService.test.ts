@@ -1289,3 +1289,79 @@ test("generator starts at the page the snapshot was captured on and uses only li
   // Without a captured page URL, fall back to the target URL.
   assert.match(buildGeneratorPrompt(generationPayload, plan, 14000), /Start URL: https:\/\/example\.com/);
 });
+
+test("metrics hooks report prompt length, script validation attempts and planner duplicates without changing results", async () => {
+  const llmCalls: Array<{ stage: string; model: string; promptChars: number }> = [];
+  const attempts: Array<{ attempt: number; passed: boolean; reason?: string }> = [];
+  const metricsHooks = {
+    onLlmCall: (call: { stage: "planner" | "script"; model: string; promptChars: number }) => llmCalls.push(call),
+    onScriptAttempt: (attempt: { attempt: number; passed: boolean; reason?: string }) => attempts.push(attempt),
+  };
+  const requests: OllamaChatRequest[] = [];
+  const ollamaClient = mockOllamaClient([
+    { content: JSON.stringify({ id: "TC-001", title: "ตรวจสอบหน้าเว็บ", script: "not a playwright script" }) },
+    { content: JSON.stringify({ id: "TC-001", title: "ตรวจสอบหน้าเว็บ", script: validScript }) },
+  ], requests);
+
+  const generated = await generateSingleScript(generationPayload, {
+    id: "TC-001",
+    title: "ตรวจสอบหน้าเว็บ",
+    description: "ตรวจสอบว่าหน้าเว็บแสดงผล",
+    type: "UI",
+    testSteps: ["เปิดหน้าเว็บ"],
+    expectedResult: "มีหัวข้อแสดงอยู่บนหน้าเว็บ",
+  }, { ollamaClient, scriptModel: "script-test-model", metricsHooks });
+
+  assert.equal(generated.script.includes("expect("), true);
+  assert.deepEqual(attempts.map(({ attempt, passed }) => ({ attempt, passed })), [
+    { attempt: 1, passed: false },
+    { attempt: 2, passed: true },
+  ]);
+  assert.match(attempts[0].reason ?? "", /Generated script/);
+  assert.equal(llmCalls.length, 2);
+  assert.equal(llmCalls[0].stage, "script");
+  assert.equal(llmCalls[0].model, "script-test-model");
+  // The mock keeps a reference to the messages array, which later also receives the assistant reply.
+  const firstRequestChars = requests[0].messages!
+    .filter((message) => message.role === "system" || message.role === "user")
+    .reduce((total, message) => total + message.content.length, 0);
+  assert.equal(llmCalls[0].promptChars, firstRequestChars);
+
+  // A throwing hook must not break generation.
+  const throwingClient = mockOllamaClient([{ content: JSON.stringify({ id: "TC-001", title: "t", script: validScript }) }]);
+  await generateSingleScript(generationPayload, {
+    id: "TC-001", title: "t", description: "d", type: "UI", testSteps: ["s"], expectedResult: "e",
+  }, {
+    ollamaClient: throwingClient,
+    metricsHooks: { onLlmCall: () => { throw new Error("boom"); }, onScriptAttempt: () => { throw new Error("boom"); } },
+  });
+
+  const done = {
+    status: "done", id: "", title: "", description: "", type: "UI", testSteps: [], expectedResult: "",
+    requirementIds: [], category: "exploratory", targetElement: "", inputVariant: "",
+  };
+  const sameCase = {
+    status: "case", id: "p", title: "ใส่จำนวน 0 ในช่อง Quantity", description: "d", type: "UI",
+    testSteps: ["ใส่ 0"], expectedResult: "ระบบไม่ยอมรับค่า 0", requirementIds: [], category: "boundary",
+    targetElement: "Quantity", inputVariant: "quantity=0",
+  };
+  const plannerClient = mockOllamaClient([
+    { content: JSON.stringify(sameCase) },
+    { content: JSON.stringify({ ...sameCase, title: "กรอกจำนวนเป็นศูนย์ในช่อง Quantity" }) },
+    { content: JSON.stringify(done) },
+  ]);
+  const duplicates: string[] = [];
+  const result = await processSnapshotTestPlans(
+    generationPayload,
+    "Cart page",
+    { ollamaClient: plannerClient },
+    async () => true,
+    [],
+    new Set(),
+    true,
+    new PlanCoverageRegistry(),
+    { onDuplicate: (plan, duplicateOf) => duplicates.push(`${plan.title} -> ${duplicateOf}`) },
+  );
+  assert.deepEqual(result, { status: "complete", planCount: 1 });
+  assert.deepEqual(duplicates, ["กรอกจำนวนเป็นศูนย์ในช่อง Quantity -> ใส่จำนวน 0 ในช่อง Quantity"]);
+});

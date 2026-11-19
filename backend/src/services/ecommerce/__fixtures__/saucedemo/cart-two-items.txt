@@ -1,0 +1,82 @@
+### Page
+- Page URL: https://www.saucedemo.com/cart.html
+- Page Title: Swag Labs
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [data-test="inventory-item"] <div> x2 "1 Sauce Labs Backpack carry.al"
+- [data-test="item-quantity"] <div> x2 "1"
+- [data-test="inventory-item-name"] <div> x2 "Sauce Labs Backpack"
+- [data-test="inventory-item-desc"] <div> x2 "carry.allTheThings() with the "
+- [data-test="inventory-item-price"] <div> x2 "$29.99"
+- [data-test="remove-sauce-labs-backpack"] <button> "Remove"
+- [data-test="remove-sauce-labs-bike-light"] <button> "Remove"
+- [data-test="continue-shopping"] <button> "Continue Shopping"
+- [data-test="checkout"] <button> "Checkout"
+- [data-test="shopping-cart-link"] <a> "2"
+- [data-test="item-4-title-link"] <a> "Sauce Labs Backpack"
+- [data-test="item-0-title-link"] <a> "Sauce Labs Bike Light"
+- [data-test="social-x"] <a> "X"
+- [data-test="social-facebook"] <a> "Facebook"
+- [data-test="social-linkedin"] <a> "LinkedIn"
+- [data-test="header-container"] <header> "Open Menu Swag Labs 2 Your Car"
+- [data-test="primary-header"] <div> "Open Menu Swag Labs 2"
+- [id="menu_button_container"] <div> "Open Menu"
+- [id="shopping_cart_container"] <div> "2"
+- [data-test="shopping-cart-badge"] <span> "2"
+- [data-test="secondary-header"] <div> "Your Cart"
+- [data-test="title"] <span> "Your Cart"
+- [data-test="cart-contents-container"] <div> "QTYDescription 1 Sauce Labs Ba"
+- [data-test="cart-list"] <div> "QTYDescription 1 Sauce Labs Ba"
+- (5 more omitted)
+### Snapshot
+```yaml
+- generic [ref=f10e3]:
+  - generic [ref=f10e4]:
+    - banner [ref=f10e5]:
+      - generic [ref=f10e6]:
+        - generic [ref=f10e7]:
+          - button "Open Menu" [ref=f10e8] [cursor=pointer]
+          - img "Open Menu" [ref=f10e9]
+        - generic [ref=f10e22]: Swag Labs
+        - button "Cart, 2 items" [ref=f10e25]:
+          - generic [ref=f10e26]: "2"
+      - generic [ref=f10e27]: Your Cart
+    - main [ref=f10e29]:
+      - generic [ref=f10e30]:
+        - generic [ref=f10e31]:
+          - generic [ref=f10e32]: QTY
+          - generic [ref=f10e33]: Description
+          - generic [ref=f10e34]:
+            - generic [ref=f10e35]: "1"
+            - generic [ref=f10e36]:
+              - button "View details for Sauce Labs Backpack" [ref=f10e37] [cursor=pointer]:
+                - generic [ref=f10e38]: Sauce Labs Backpack
+              - generic [ref=f10e39]: carry.allTheThings() with the sleek, streamlined Sly Pack that melds uncompromising style with unequaled laptop and tablet protection.
+              - generic [ref=f10e40]:
+                - generic [ref=f10e41]: $29.99
+                - button "Remove" [ref=f10e42] [cursor=pointer]
+          - generic [ref=f10e43]:
+            - generic [ref=f10e44]: "1"
+            - generic [ref=f10e45]:
+              - button "View details for Sauce Labs Bike Light" [ref=f10e46] [cursor=pointer]:
+                - generic [ref=f10e47]: Sauce Labs Bike Light
+              - generic [ref=f10e48]: A red light isn't the desired state in testing but it sure helps when riding your bike at night. Water-resistant with 3 lighting modes, 1 AAA battery included.
+              - generic [ref=f10e49]:
+                - generic [ref=f10e50]: $9.99
+                - button "Remove" [ref=f10e51] [cursor=pointer]
+        - generic [ref=f10e52]:
+          - button "Continue Shopping" [ref=f10e53] [cursor=pointer]
+          - button "Checkout" [ref=f10e54] [cursor=pointer]
+  - contentinfo [ref=f10e55]:
+    - list [ref=f10e56]:
+      - listitem [ref=f10e57]:
+        - link "X" [ref=f10e58] [cursor=pointer]:
+          - /url: https://x.com/saucelabs
+      - listitem [ref=f10e59]:
+        - link "Facebook" [ref=f10e60] [cursor=pointer]:
+          - /url: https://www.facebook.com/saucelabs
+      - listitem [ref=f10e61]:
+        - link "LinkedIn" [ref=f10e62] [cursor=pointer]:
+          - /url: https://www.linkedin.com/company/sauce-labs/
+    - generic [ref=f10e63]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
+```

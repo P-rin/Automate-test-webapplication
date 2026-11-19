@@ -1,0 +1,22 @@
+{
+  "$comment": "Expected results for unit tests of the e-commerce pipeline. pageType: Phase 4 classifier; compactor: Phase 1 (mustKeep = substrings the compact prompt must contain).",
+  "pageType": "listing",
+  "compactor": {
+    "repeatedGroups": [
+      {
+        "count": 9,
+        "containerHint": "article",
+        "firstLabel": "AirPods Pro 2 USB-C"
+      }
+    ],
+    "mustKeep": [
+      "ค้นหาสินค้าด้วยชื่อ...",
+      "ทุกหมวดหมู่",
+      "฿7,990",
+      "คงเหลือ 43",
+      "เข้าสู่ระบบเพื่อซื้อ",
+      "สินค้าหมด",
+      "(อีก 6 ชิ้นรูปแบบเดียวกับ G1)"
+    ]
+  }
+}

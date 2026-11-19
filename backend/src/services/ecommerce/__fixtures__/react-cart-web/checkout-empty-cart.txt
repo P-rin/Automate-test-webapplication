@@ -1,0 +1,33 @@
+### Page
+- Page URL: http://localhost:5173/checkout
+- Page Title: ร้านค้าออนไลน์
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [id="root"] <div> "เข้าสู่ระบบในชื่อ <redacted>"
+### Snapshot
+```yaml
+- main [ref=f12e3]:
+  - generic [ref=f12e4]:
+    - generic [ref=f12e5]:
+      - generic [ref=f12e6]:
+        - paragraph [ref=f12e7]: เข้าสู่ระบบในชื่อ
+        - paragraph [ref=f12e8]: test+auto@example.com
+      - navigation [ref=f12e9]:
+        - link "หน้าแรก" [ref=f12e10] [cursor=pointer]:
+          - /url: /
+        - link "สินค้าทั้งหมด" [ref=f12e11] [cursor=pointer]:
+          - /url: /products
+        - link "บัญชีของฉัน" [ref=f12e12] [cursor=pointer]:
+          - /url: /profile
+        - link "รายการโปรด" [ref=f12e13] [cursor=pointer]:
+          - /url: /whitelist
+        - link "ตะกร้าสินค้า" [ref=f12e14] [cursor=pointer]:
+          - /url: /cart
+        - link "คำสั่งซื้อ" [ref=f12e15] [cursor=pointer]:
+          - /url: /orders
+    - generic [ref=f12e20]:
+      - heading "ไม่มีสินค้าในตะกร้า" [level=1] [ref=f12e21]
+      - paragraph [ref=f12e22]: เพิ่มสินค้าในตะกร้าก่อนทำรายการชำระเงิน
+      - link "กลับไปตะกร้า" [ref=f12e23] [cursor=pointer]:
+        - /url: /cart
+```

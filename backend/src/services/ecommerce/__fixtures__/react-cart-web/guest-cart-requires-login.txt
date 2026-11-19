@@ -1,0 +1,37 @@
+### Page
+- Page URL: http://localhost:5173/cart
+- Page Title: ร้านค้าออนไลน์
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [id="root"] <div> "กำลังใช้งานในฐานะ Guest หน้าแร"
+### Snapshot
+```yaml
+- main [ref=f5e3]:
+  - generic [ref=f5e4]:
+    - generic [ref=f5e5]:
+      - generic [ref=f5e6]:
+        - paragraph [ref=f5e7]: กำลังใช้งานในฐานะ
+        - paragraph [ref=f5e8]: Guest
+      - navigation [ref=f5e9]:
+        - link "หน้าแรก" [ref=f5e10] [cursor=pointer]:
+          - /url: /
+        - link "สินค้าทั้งหมด" [ref=f5e11] [cursor=pointer]:
+          - /url: /products
+        - link "บัญชีของฉัน" [ref=f5e12] [cursor=pointer]:
+          - /url: /profile
+        - link "รายการโปรด" [ref=f5e13] [cursor=pointer]:
+          - /url: /whitelist
+        - link "ตะกร้าสินค้า" [ref=f5e14] [cursor=pointer]:
+          - /url: /cart
+        - link "คำสั่งซื้อ" [ref=f5e15] [cursor=pointer]:
+          - /url: /orders
+        - link "เข้าสู่ระบบ" [ref=f5e16] [cursor=pointer]:
+          - /url: /login
+        - link "สมัครสมาชิก" [ref=f5e17] [cursor=pointer]:
+          - /url: /register
+    - generic [ref=f5e20]:
+      - heading "กรุณาเข้าสู่ระบบก่อน" [level=1] [ref=f5e21]
+      - paragraph [ref=f5e22]: หน้านี้สำหรับสมาชิก กรุณาเข้าสู่ระบบเพื่อใช้งานต่อ
+      - link "เข้าสู่ระบบ" [ref=f5e23] [cursor=pointer]:
+        - /url: /login
+```

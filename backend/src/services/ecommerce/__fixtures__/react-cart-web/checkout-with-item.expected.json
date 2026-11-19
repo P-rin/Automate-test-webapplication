@@ -1,0 +1,16 @@
+{
+  "$comment": "Expected results for unit tests of the e-commerce pipeline. pageType: Phase 4 classifier; compactor: Phase 1 (mustKeep = substrings the compact prompt must contain).",
+  "pageType": "checkout",
+  "stateLabel": "checkout_with_1_item",
+  "compactor": {
+    "repeatedGroups": [],
+    "mustKeep": [
+      "textbox \"ชื่อผู้รับ\"",
+      "textbox \"รหัสไปรษณีย์\"",
+      "textbox \"หมายเหตุเพิ่มเติม\"",
+      "ยืนยันและชำระเงิน\" [disabled]",
+      "ภาษี (7%): ฿559.3",
+      "ยอดสุทธิ: ฿8,549.3"
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+### Page
+- Page URL: https://www.saucedemo.com/
+- Page Title: Swag Labs
+- Console: 1 errors, 0 warnings
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [data-test="username"] <input> "Username"
+- [data-test="password"] <input> "Password"
+- [data-test="login-button"] <input> "Login"
+- [id="root"] <div> "Swag Labs Accepted usernames a"
+- [data-test="login-container"] <div> "Accepted usernames are: standa"
+- [id="login_button_container"] <div>
+- [data-test="login-credentials-container"] <div> "Accepted usernames are: standa"
+- [data-test="login-credentials"] <div> "Accepted usernames are: standa"
+- [data-test="login-password"] <div> "Password for all users: secret"
+### Snapshot
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]: Swag Labs
+  - main [ref=e5]:
+    - form "Login" [ref=e9]:
+      - textbox "Username" [ref=e11]
+      - textbox "Password" [ref=e13]
+      - button "Login" [ref=e15] [cursor=pointer]
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - heading "Accepted usernames are:" [level=4] [ref=e19]
+        - text: standard_userlocked_out_userproblem_userperformance_glitch_usererror_uservisual_user
+      - generic [ref=e20]:
+        - heading "Password for all users:" [level=4] [ref=e21]
+        - text: ********
+```
+### Events
+- New console entries: .playwright-mcp\console-2026-11-19T05-11-43-648Z.log#L1-L2

@@ -15,6 +15,7 @@ import { resolvePlaywrightMcpLaunchConfig } from "./snapshotService.js";
 import { createOllamaDebugFetch, serializeOllamaDebugError, writeOllamaDebugRecord } from "../debug/ollamaDebug.js";
 import { createIdleTimeoutFetch } from "./ollamaTimeoutFetch.js";
 import { type CoveredCase, formatCoveredCase, PlanCoverageRegistry } from "./planDedup.js";
+import { promptCharsOf, type GenerationMetricsHooks } from "./generationMetrics.js";
 
 interface CopilotRequest {
   projectName: string;
@@ -101,6 +102,8 @@ export interface LlmGenerationOptions {
     stage: "planner" | "script";
     planId?: string;
   };
+  /** Optional per-job metrics hooks (see generationMetrics.ts); never affect generation behavior. */
+  metricsHooks?: GenerationMetricsHooks;
 }
 
 const DEFAULT_LLM_MAX_PROMPT_CHARS = 14000;
@@ -700,6 +703,11 @@ const callOllamaModel = async (
     for (let turn = 0; turn < MAX_MODEL_TURNS; turn += 1) {
       let response: ChatResponse;
       try {
+        options.metricsHooks?.onLlmCall?.({ stage, model, promptChars: promptCharsOf(messages) });
+      } catch {
+        // Metrics must never break generation.
+      }
+      try {
         response = await collectChatResponse(await ollama.chat({
           model,
           stream: true,
@@ -994,6 +1002,7 @@ export const processSnapshotTestPlans = async (
   coveredAcIds: Set<string> = new Set(),
   allowMutatingTests = true,
   coverage: PlanCoverageRegistry = new PlanCoverageRegistry(),
+  hooks: { onDuplicate?: (plan: TestPlan, duplicateOf: string) => void } = {},
 ): Promise<IncrementalPlanningResult> => {
   const acceptanceCriteria = Array.isArray(acceptanceCriteriaOrKnownAcIds)
     ? acceptanceCriteriaOrKnownAcIds
@@ -1035,6 +1044,13 @@ export const processSnapshotTestPlans = async (
     // Rejected duplicates are not added to the prompt list; the registry moves the matched case to the
     // most-recent end instead, so the case the model keeps repeating stays visible inside the prompt budget.
     const duplicateOf = coverage.findDuplicate(plan, { titleOnly: coversNewAc });
+    if (duplicateOf !== undefined) {
+      try {
+        hooks.onDuplicate?.(plan, duplicateOf);
+      } catch {
+        // Metrics must never break planning.
+      }
+    }
     const accepted = duplicateOf === undefined && await persistCase(plan, planCount + 1);
     if (!accepted) {
       repeatedCaseCount += 1;
@@ -1052,6 +1068,17 @@ export const processSnapshotTestPlans = async (
     for (const id of plan.requirementIds ?? []) coveredAcIds.add(id);
     planCount += 1;
     repeatedCaseCount = 0;
+  }
+};
+
+const reportScriptAttempt = (
+  options: LlmGenerationOptions,
+  attempt: Parameters<NonNullable<GenerationMetricsHooks["onScriptAttempt"]>>[0],
+): void => {
+  try {
+    options.metricsHooks?.onScriptAttempt?.(attempt);
+  } catch {
+    // Metrics must never break generation.
   }
 };
 
@@ -1094,6 +1121,7 @@ export const generateSingleScript = async (
         scriptPreview = buildScriptPreview(executableScript);
 
         validateGeneratedScript(executableScript);
+        reportScriptAttempt(options, { attempt: attempt + 1, passed: true });
 
         return {
           id: generated.id,
@@ -1106,6 +1134,11 @@ export const generateSingleScript = async (
           || error.message === "Generator response missing required fields"
         );
         const isTokenRepeatError = error instanceof Error && /token repeat limit reached/i.test(error.message);
+        reportScriptAttempt(options, {
+          attempt: attempt + 1,
+          passed: false,
+          reason: error instanceof Error ? error.message : String(error),
+        });
         if ((!isRetryableOutputError && !isTokenRepeatError) || attempt === 2) throw error;
         retryFeedback = isTokenRepeatError
           ? "The previous generation stopped because the model repeated tokens. Produce a shorter, direct Playwright script with minimal code and no repeated steps."

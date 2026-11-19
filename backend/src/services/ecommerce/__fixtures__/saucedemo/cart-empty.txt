@@ -1,0 +1,60 @@
+### Page
+- Page URL: https://www.saucedemo.com/cart.html
+- Page Title: Swag Labs
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [data-test="continue-shopping"] <button> "Continue Shopping"
+- [data-test="checkout"] <button> "Checkout"
+- [data-test="shopping-cart-link"] <a>
+- [data-test="social-x"] <a> "X"
+- [data-test="social-facebook"] <a> "Facebook"
+- [data-test="social-linkedin"] <a> "LinkedIn"
+- [id="root"] <div> "Open Menu Swag Labs Your Cart "
+- [id="page_wrapper"] <div> "Open Menu Swag Labs Your Cart "
+- [id="contents_wrapper"] <div> "Open Menu Swag Labs Your Cart "
+- [data-test="header-container"] <header> "Open Menu Swag Labs Your Cart"
+- [data-test="primary-header"] <div> "Open Menu Swag Labs"
+- [id="menu_button_container"] <div> "Open Menu"
+- [id="shopping_cart_container"] <div>
+- [data-test="secondary-header"] <div> "Your Cart"
+- [data-test="title"] <span> "Your Cart"
+- [data-test="cart-contents-container"] <div> "QTYDescription Continue Shoppi"
+- [data-test="cart-list"] <div> "QTYDescription"
+- [data-test="cart-quantity-label"] <div> "QTY"
+- [data-test="cart-desc-label"] <div> "Description"
+- [data-test="footer"] <footer> "X Facebook LinkedIn © 2026 Sau"
+- [data-test="footer-copy"] <div> "© 2026 Sauce Labs. All Rights "
+- [data-test="open-menu"] <img>
+### Snapshot
+```yaml
+- generic [ref=f2e3]:
+  - generic [ref=f2e4]:
+    - banner [ref=f2e5]:
+      - generic [ref=f2e6]:
+        - generic [ref=f2e7]:
+          - button "Open Menu" [ref=f2e8] [cursor=pointer]
+          - img "Open Menu" [ref=f2e9]
+        - generic [ref=f2e22]: Swag Labs
+        - button "Cart, empty" [ref=f2e25]
+      - generic [ref=f2e26]: Your Cart
+    - main [ref=f2e28]:
+      - generic [ref=f2e29]:
+        - generic [ref=f2e30]:
+          - generic [ref=f2e31]: QTY
+          - generic [ref=f2e32]: Description
+        - generic [ref=f2e33]:
+          - button "Continue Shopping" [ref=f2e34] [cursor=pointer]
+          - button "Checkout" [ref=f2e35] [cursor=pointer]
+  - contentinfo [ref=f2e36]:
+    - list [ref=f2e37]:
+      - listitem [ref=f2e38]:
+        - link "X" [ref=f2e39] [cursor=pointer]:
+          - /url: https://x.com/saucelabs
+      - listitem [ref=f2e40]:
+        - link "Facebook" [ref=f2e41] [cursor=pointer]:
+          - /url: https://www.facebook.com/saucelabs
+      - listitem [ref=f2e42]:
+        - link "LinkedIn" [ref=f2e43] [cursor=pointer]:
+          - /url: https://www.linkedin.com/company/sauce-labs/
+    - generic [ref=f2e44]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
+```

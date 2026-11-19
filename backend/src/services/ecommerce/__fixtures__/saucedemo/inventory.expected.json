@@ -1,0 +1,20 @@
+{
+  "$comment": "Expected results for unit tests of the e-commerce pipeline. pageType: Phase 4 classifier; compactor: Phase 1 (mustKeep = substrings the compact prompt must contain).",
+  "pageType": "listing",
+  "compactor": {
+    "repeatedGroups": [
+      {
+        "count": 6,
+        "containerHint": "[data-test=\"inventory-item\"]",
+        "firstLabel": "Sauce Labs Backpack"
+      }
+    ],
+    "mustKeep": [
+      "Sort products",
+      "Price (low to high)",
+      "$29.99",
+      "Add to cart",
+      "(อีก 3 ชิ้นรูปแบบเดียวกับ G1)"
+    ]
+  }
+}

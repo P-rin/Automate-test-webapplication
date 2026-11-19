@@ -1,0 +1,88 @@
+### Page
+- Page URL: https://www.saucedemo.com/checkout-step-two.html
+- Page Title: Swag Labs
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [data-test="inventory-item"] <div> x2 "1 Sauce Labs Backpack carry.al"
+- [data-test="item-quantity"] <div> x2 "1"
+- [data-test="inventory-item-name"] <div> x2 "Sauce Labs Backpack"
+- [data-test="inventory-item-desc"] <div> x2 "carry.allTheThings() with the "
+- [data-test="inventory-item-price"] <div> x2 "$29.99"
+- [data-test="cancel"] <button> "Cancel"
+- [data-test="finish"] <button> "Finish"
+- [data-test="shopping-cart-link"] <a> "2"
+- [data-test="item-4-title-link"] <a> "Sauce Labs Backpack"
+- [data-test="item-0-title-link"] <a> "Sauce Labs Bike Light"
+- [data-test="social-x"] <a> "X"
+- [data-test="social-facebook"] <a> "Facebook"
+- [data-test="social-linkedin"] <a> "LinkedIn"
+- [data-test="header-container"] <header> "Open Menu Swag Labs 2 Checkout"
+- [data-test="primary-header"] <div> "Open Menu Swag Labs 2"
+- [id="menu_button_container"] <div> "Open Menu"
+- [id="shopping_cart_container"] <div> "2"
+- [data-test="shopping-cart-badge"] <span> "2"
+- [data-test="secondary-header"] <div> "Checkout: Overview"
+- [data-test="title"] <span> "Checkout: Overview"
+- [data-test="checkout-summary-container"] <div> "QTYDescription 1 Sauce Labs Ba"
+- [data-test="cart-list"] <div> "QTYDescription 1 Sauce Labs Ba"
+- [data-test="cart-quantity-label"] <div> "QTY"
+- [data-test="cart-desc-label"] <div> "Description"
+- [data-test="payment-info-label"] <div> "Payment Information:"
+- (10 more omitted)
+### Snapshot
+```yaml
+- generic [ref=f10e104]:
+  - generic [ref=f10e105]:
+    - banner [ref=f10e106]:
+      - generic [ref=f10e107]:
+        - generic [ref=f10e108]:
+          - button "Open Menu" [ref=f10e109] [cursor=pointer]
+          - img "Open Menu" [ref=f10e110]
+        - generic [ref=f10e111]: Swag Labs
+        - button "Cart, 2 items" [ref=f10e114]:
+          - generic [ref=f10e115]: "2"
+      - generic [ref=f10e116]: "Checkout: Overview"
+    - main [ref=f10e118]:
+      - generic [ref=f10e119]:
+        - generic [ref=f10e120]:
+          - generic [ref=f10e121]: QTY
+          - generic [ref=f10e122]: Description
+          - generic [ref=f10e123]:
+            - generic [ref=f10e124]: "1"
+            - generic [ref=f10e125]:
+              - button "View details for Sauce Labs Backpack" [ref=f10e126] [cursor=pointer]:
+                - generic [ref=f10e127]: Sauce Labs Backpack
+              - generic [ref=f10e128]: carry.allTheThings() with the sleek, streamlined Sly Pack that melds uncompromising style with unequaled laptop and tablet protection.
+              - generic [ref=f10e129]: $29.99
+          - generic [ref=f10e131]:
+            - generic [ref=f10e132]: "1"
+            - generic [ref=f10e133]:
+              - button "View details for Sauce Labs Bike Light" [ref=f10e134] [cursor=pointer]:
+                - generic [ref=f10e135]: Sauce Labs Bike Light
+              - generic [ref=f10e136]: A red light isn't the desired state in testing but it sure helps when riding your bike at night. Water-resistant with 3 lighting modes, 1 AAA battery included.
+              - generic [ref=f10e137]: $9.99
+        - generic [ref=f10e139]:
+          - generic [ref=f10e140]: "Payment Information:"
+          - generic [ref=f10e141]: "SauceCard #31337"
+          - generic [ref=f10e142]: "Shipping Information:"
+          - generic [ref=f10e143]: Free Pony Express Delivery!
+          - generic [ref=f10e144]: Price Total
+          - generic [ref=f10e145]: "Item total: $39.98"
+          - generic [ref=f10e146]: "Tax: $3.20"
+          - generic [ref=f10e147]: "Total: $43.18"
+          - generic [ref=f10e148]:
+            - button "Cancel" [ref=f10e149] [cursor=pointer]
+            - button "Finish" [ref=f10e150] [cursor=pointer]
+  - contentinfo [ref=f10e151]:
+    - list [ref=f10e152]:
+      - listitem [ref=f10e153]:
+        - link "X" [ref=f10e154] [cursor=pointer]:
+          - /url: https://x.com/saucelabs
+      - listitem [ref=f10e155]:
+        - link "Facebook" [ref=f10e156] [cursor=pointer]:
+          - /url: https://www.facebook.com/saucelabs
+      - listitem [ref=f10e157]:
+        - link "LinkedIn" [ref=f10e158] [cursor=pointer]:
+          - /url: https://www.linkedin.com/company/sauce-labs/
+    - generic [ref=f10e159]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
+```

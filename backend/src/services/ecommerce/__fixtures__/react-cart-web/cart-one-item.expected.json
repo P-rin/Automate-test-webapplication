@@ -1,0 +1,23 @@
+{
+  "$comment": "Expected results for unit tests of the e-commerce pipeline. pageType: Phase 4 classifier; compactor: Phase 1 (mustKeep = substrings the compact prompt must contain).",
+  "pageType": "cart",
+  "stateLabel": "cart_with_1_item",
+  "compactor": {
+    "repeatedGroups": [
+      {
+        "count": 1,
+        "containerHint": "article",
+        "firstLabel": "AirPods Pro 2 USB-C"
+      }
+    ],
+    "mustKeep": [
+      "฿7,990 ต่อชิ้น",
+      "button \"-\" [disabled]",
+      "button \"+\"",
+      "ลบสินค้า",
+      "จำนวนสินค้าทั้งหมด: 1",
+      "ยอดรวม: ฿7,990",
+      "ดำเนินการชำระเงิน"
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+### Page
+- Page URL: https://www.saucedemo.com/inventory-item.html?id=4
+- Page Title: Swag Labs
+- Console: 2 errors, 0 warnings
+### Test IDs
+DOM attributes (not in the tree below). Use only as written: page.locator('[data-test="value"]').
+- [data-test="back-to-products"] <button> "Back to products"
+- [data-test="add-to-cart"] <button> "Add to cart"
+- [data-test="shopping-cart-link"] <a>
+- [data-test="social-x"] <a> "X"
+- [data-test="social-facebook"] <a> "Facebook"
+- [data-test="social-linkedin"] <a> "LinkedIn"
+- [id="page_wrapper"] <div> "Open Menu Swag Labs Back to pr"
+- [id="contents_wrapper"] <div> "Open Menu Swag Labs Back to pr"
+- [data-test="header-container"] <header> "Open Menu Swag Labs Back to pr"
+- [data-test="primary-header"] <div> "Open Menu Swag Labs"
+- [id="menu_button_container"] <div> "Open Menu"
+- [id="shopping_cart_container"] <div>
+- [data-test="secondary-header"] <div> "Back to products"
+- [data-test="inventory-container"] <div> "Sauce Labs Backpack carry.allT"
+- [data-test="inventory-item"] <div> "Sauce Labs Backpack carry.allT"
+- [data-test="inventory-item-name"] <div> "Sauce Labs Backpack"
+- [data-test="inventory-item-desc"] <div> "carry.allTheThings() with the "
+- [data-test="inventory-item-price"] <div> "$29.99"
+- [data-test="footer"] <footer> "X Facebook LinkedIn © 2026 Sau"
+- [data-test="footer-copy"] <div> "© 2026 Sauce Labs. All Rights "
+- [data-test="open-menu"] <img>
+- [data-test="item-sauce-labs-backpack-img"] <img>
+### Snapshot
+```yaml
+- generic [ref=e124]:
+  - generic [ref=e125]:
+    - banner [ref=e126]:
+      - generic [ref=e127]:
+        - generic [ref=e128]:
+          - button "Open Menu" [ref=e129] [cursor=pointer]
+          - img "Open Menu" [ref=e130]
+        - generic [ref=e131]: Swag Labs
+        - button "Cart, empty" [ref=e134]
+      - button "Back to products" [ref=e137] [cursor=pointer]
+    - main [ref=e138]:
+      - generic [ref=e140]:
+        - img "Sauce Labs Backpack" [ref=e142]
+        - generic [ref=e143]:
+          - generic [ref=e144]: Sauce Labs Backpack
+          - generic [ref=e145]: carry.allTheThings() with the sleek, streamlined Sly Pack that melds uncompromising style with unequaled laptop and tablet protection.
+          - generic [ref=e146]: $29.99
+          - button "Add to cart" [ref=e147] [cursor=pointer]
+  - contentinfo [ref=e148]:
+    - list [ref=e149]:
+      - listitem [ref=e150]:
+        - link "X" [ref=e151] [cursor=pointer]:
+          - /url: https://x.com/saucelabs
+      - listitem [ref=e152]:
+        - link "Facebook" [ref=e153] [cursor=pointer]:
+          - /url: https://www.facebook.com/saucelabs
+      - listitem [ref=e154]:
+        - link "LinkedIn" [ref=e155] [cursor=pointer]:
+          - /url: https://www.linkedin.com/company/sauce-labs/
+    - generic [ref=e156]: © 2026 Sauce Labs. All Rights Reserved. Terms of Service | Privacy Policy
+```

@@ -19,3 +19,5 @@ backend/storage
 *.der
 *service-account*.json
 *credentials*.json
+# Per-call generation metrics logs (summaries go to backend/metrics/ via npm run metrics:report)
+backend/logs/generation-metrics/

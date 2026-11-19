@@ -38,7 +38,20 @@ const asNonNegativeInteger = (value: string | undefined, fallback: number): numb
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
+export const GENERATION_MODES = ["legacy", "ecommerce"] as const;
+export type GenerationMode = typeof GENERATION_MODES[number];
+
+/** Unknown or empty values fall back to "legacy" so a typo never switches the pipeline. */
+export const asGenerationMode = (value: string | undefined): GenerationMode => {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return "legacy";
+  if ((GENERATION_MODES as readonly string[]).includes(normalized)) return normalized as GenerationMode;
+  console.warn(`Unknown GENERATION_MODE "${value}"; using "legacy"`);
+  return "legacy";
+};
+
 export const env = {
+  generationMode: asGenerationMode(process.env.GENERATION_MODE),
   port: Number(process.env.PORT ?? 4000),
   screenshotHost: process.env.SCREENSHOT_HOST ?? "localhost",
   frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://localhost:5173",

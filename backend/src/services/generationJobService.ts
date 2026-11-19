@@ -5,7 +5,6 @@ import { saveGeneratedTestCase } from "./testCaseService.js";
 import { getJobCredentials, saveJobCredentials, type LoginCredentials } from "./credentialService.js";
 import { discoverAccessibilitySnapshot, discoverPages, discoverSelectedPageSnapshots } from "./snapshotService.js";
 import {
-  processSnapshotTestPlans,
   generateNextTestPlan,
   generateSingleScript,
   LlmGenerationOptions,
@@ -18,7 +17,46 @@ import { touchProject } from "./projectService.js";
 import { cacheCasePatch, cacheCreatedJob, cacheJobPatch, cacheTimestampNow, dropJobCache } from "./jobProgressCache.js";
 import { generateAcceptanceCriteria, splitRequirementUnitsWithWarnings } from "./requirementService.js";
 import { findBestSnapshotForCriterion, type CriterionMatchSnapshot } from "./criterionMatching.js";
+import { GenerationMetricsCollector, metricIncrements } from "./generationMetrics.js";
+import { selectSnapshotPlanner } from "./ecommerce/pipeline.js";
+import { appendFile, mkdir } from "node:fs/promises";
+import path from "node:path";
 export { findBestSnapshotForCriterion } from "./criterionMatching.js";
+
+const GENERATION_METRICS_LOG_DIR = path.resolve(process.cwd(), "logs", "generation-metrics");
+
+/**
+ * Adds this invocation's counters to `generationJobs/{id}.generationMetrics` (FieldValue.increment) and appends
+ * the full snapshot, including every LLM call's prompt length, to logs/generation-metrics/<jobId>.jsonl.
+ * Never throws: metrics must not change a job's outcome.
+ */
+const flushGenerationMetrics = async (
+  jobId: string,
+  metrics: GenerationMetricsCollector,
+  invocation: "planning" | "script",
+): Promise<void> => {
+  const snapshot = metrics.toJSON();
+  const increments = metricIncrements(snapshot);
+  if (Object.keys(increments).length === 0) return;
+  try {
+    await generationJobRef(jobId).update({
+      "generationMetrics.mode": snapshot.mode,
+      ...Object.fromEntries(Object.entries(increments).map(([field, value]) => [field, FieldValue.increment(value)])),
+    });
+  } catch (error) {
+    console.warn(`Failed to store generation metrics for ${jobId}:`, error);
+  }
+  try {
+    await mkdir(GENERATION_METRICS_LOG_DIR, { recursive: true });
+    await appendFile(
+      path.join(GENERATION_METRICS_LOG_DIR, `${jobId.replace(/[^\w-]/g, "_")}.jsonl`),
+      `${JSON.stringify({ at: new Date().toISOString(), jobId, invocation, ...snapshot, calls: metrics.calls })}\n`,
+      "utf8",
+    );
+  } catch (error) {
+    console.warn(`Failed to write generation metrics log for ${jobId}:`, error);
+  }
+};
 
 interface GenerationJobPayload {
   projectName: string;
@@ -587,6 +625,8 @@ const processGenerationJobScripts = async (
   let completedCount = 0;
   let failedCount = 0;
   const jobRef = db.collection("generationJobs").doc(jobId);
+  const metrics = new GenerationMetricsCollector(env.generationMode);
+  options = { ...options, metricsHooks: metrics.hooks };
 
   try {
     for (const caseId of caseIds) {
@@ -618,8 +658,10 @@ const processGenerationJobScripts = async (
       try {
         await generateAndSaveCaseScript(jobId, job, caseId, claimedCase, options);
         completedCount += 1;
+        metrics.recordScriptCase(true);
       } catch (error) {
         failedCount += 1;
+        metrics.recordScriptCase(false);
         const message = error instanceof Error ? error.message : String(error);
         await updateGenerationCaseFields(jobId, caseId, { status: "failed", errorMessage: message });
       }
@@ -627,6 +669,7 @@ const processGenerationJobScripts = async (
       await jobRef.update({ scriptGenerationCompletedCount: FieldValue.increment(1) });
     }
   } finally {
+    await flushGenerationMetrics(jobId, metrics, "script");
     await jobRef.update({
       scriptGenerationStatus: "completed",
       scriptGenerationCurrentCaseId: FieldValue.delete(),
@@ -1122,6 +1165,14 @@ export const processGenerateJob = async (
   let coverageStopReason = "";
   let lastJobFlush = 0;
   let acceptanceCriteria: AcceptanceCriterion[] = payload.confirmedAcceptanceCriteria ?? [];
+  const metrics = new GenerationMetricsCollector(env.generationMode);
+  options = { ...options, metricsHooks: metrics.hooks };
+  // GENERATION_MODE branch point: "legacy" keeps the original planner untouched; "ecommerce" routes each
+  // snapshot through services/ecommerce/pipeline.ts. Discovery and AC analysis are shared by both modes.
+  const snapshotPlanner = selectSnapshotPlanner(env.generationMode);
+  if (snapshotPlanner.mode === "ecommerce") {
+    console.info(`[generation ${jobId}] GENERATION_MODE=ecommerce: stages [${snapshotPlanner.stages.join(", ")}] + legacy planner`);
+  }
 
   try {
     if (hasSpecification && !isResume) {
@@ -1222,7 +1273,7 @@ export const processGenerateJob = async (
     for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
       const snapshot = snapshots[snapshotIndex];
       let snapshotPlanningStalled = false;
-      const planningResult = await processSnapshotTestPlans(
+      const planningResult = await snapshotPlanner.planner(
         {
           projectName: payload.projectName,
           targetUrl: payload.targetUrl,
@@ -1233,9 +1284,13 @@ export const processGenerateJob = async (
         { ...options, debugContext: { jobId, stage: "planner" } },
         async (plan) => {
           const normalizedTitle = normalizeCaseTitle(plan.title);
-          if (!normalizedTitle || caseKeys.has(normalizedTitle)) return false;
+          if (!normalizedTitle || caseKeys.has(normalizedTitle)) {
+            metrics.recordRejected("duplicate_title");
+            return false;
+          }
           caseKeys.add(normalizedTitle);
           caseCount += 1;
+          metrics.recordPlanned({ category: plan.category, page: snapshot.title });
           const caseProgress = buildPlannedGenerationCase(plan, caseCount, snapshot.title, snapshotIds[snapshotIndex], snapshot.pageId);
 
           await updateGenerationCase(jobId, caseProgress.id, caseProgress);
@@ -1260,9 +1315,11 @@ export const processGenerateJob = async (
         coveredAcIds,
         payload.allowMutatingTests ?? false,
         planCoverage,
+        { onDuplicate: () => metrics.recordRejected("duplicate_registry") },
       );
 
       if (planningResult.status === "incomplete") {
+        metrics.recordStalledSnapshot();
         coverageStopReason = planningResult.stopReason;
         planningStalled = true;
         snapshotPlanningStalled = true;
@@ -1304,9 +1361,13 @@ export const processGenerateJob = async (
       },
       async (plan, snapshot) => {
         const normalizedTitle = normalizeCaseTitle(plan.title);
-        if (!normalizedTitle || caseKeys.has(normalizedTitle)) return false;
+        if (!normalizedTitle || caseKeys.has(normalizedTitle)) {
+          metrics.recordRejected("duplicate_title");
+          return false;
+        }
         caseKeys.add(normalizedTitle);
         caseCount += 1;
+        metrics.recordPlanned({ category: plan.category, page: snapshot.title });
         const snapshotIndex = snapshots.indexOf(snapshot);
         const caseProgress = buildPlannedGenerationCase(
           plan,
@@ -1365,5 +1426,7 @@ export const processGenerateJob = async (
       completedAt: true,
     });
     dropJobCache(jobId, 2 * 60_000);
+  } finally {
+    await flushGenerationMetrics(jobId, metrics, "planning");
   }
 };
