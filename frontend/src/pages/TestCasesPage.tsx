@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useProjectTestCases } from '../lib/testCasesStore';
 import { useProjectPages } from '../lib/projectPages';
-import type { TestCase, Project } from '../types';
+import type { TestCase, Project, ValidationStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
@@ -187,6 +187,17 @@ const toMillis = (value: unknown): number => {
   return 0;
 };
 
+const SHOWN_VALIDATION_STATUSES = new Set<ValidationStatus>(['verified', 'possible_bug']);
+
+const VALIDATION_BADGES: Record<ValidationStatus, { label: string; className: string; title: string }> = {
+  verified: { label: 'ยืนยันแล้ว', className: 'bg-green-50 text-green-700 border-green-200', title: 'รันกับเว็บจริงก่อนบันทึกแล้วผ่าน' },
+  possible_bug: { label: 'อาจเป็นบั๊ก', className: 'bg-red-50 text-red-700 border-red-200', title: 'กรณีผิดปกติหรือค่าขอบเขตที่ตรวจไม่ผ่าน เว็บอาจไม่ได้จัดการกรณีนี้ ผู้ใช้เป็นผู้ตัดสิน' },
+  oracle_unreliable: { label: 'ตัวตรวจไม่น่าเชื่อถือ', className: 'bg-amber-50 text-amber-800 border-amber-200', title: 'กรณีปกติที่ตรวจไม่ผ่าน มีแนวโน้มว่าวิธีตรวจผิด ไม่ใช่เว็บผิด' },
+  needs_review: { label: 'ต้องตรวจสอบ', className: 'bg-gray-100 text-gray-600 border-gray-200', title: 'รันไม่จบ เช่น หา element ไม่เจอ หรือเตรียมสถานะไม่สำเร็จ' },
+};
+
+const evidenceLabel = (url: string): string => (/\.zip$/i.test(url) ? 'trace' : /\.webm$/i.test(url) ? 'วิดีโอ' : 'ภาพหน้าจอ');
+
 export default function TestCasesPage() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
@@ -218,6 +229,7 @@ export default function TestCasesPage() {
   const [editedScript, setEditedScript] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showReviewCases, setShowReviewCases] = useState(false);
 
   const sidebarProjects = useMemo(() => (
     linkedProject && !projectPages.projects.some(project => project.id === linkedProject.id)
@@ -230,6 +242,12 @@ export default function TestCasesPage() {
 
   // Only the open project's test cases are loaded (see testCasesStore).
   const { testCases: filteredCases, loaded: areTestCasesLoaded } = useProjectTestCases(user?.uid, activeProjectId);
+  // Cases the validation run could not confirm (Phase 8d) are listed apart, with the reason; cases without a
+  // validation result (legacy generation, hand-written) stay in the main list.
+  const { mainCases, reviewCases } = useMemo(() => ({
+    mainCases: filteredCases.filter(tc => !tc.validationStatus || SHOWN_VALIDATION_STATUSES.has(tc.validationStatus)),
+    reviewCases: filteredCases.filter(tc => tc.validationStatus && !SHOWN_VALIDATION_STATUSES.has(tc.validationStatus)),
+  }), [filteredCases]);
 
   // Opening a job from a link (?jobId=) selects its project, wherever it is in the list.
   useEffect(() => {
@@ -524,6 +542,78 @@ export default function TestCasesPage() {
       alert('เกิดข้อผิดพลาดในการบันทึกการแก้ไข');
     }
   };
+
+  const validationBadge = (tc: TestCase) => {
+    if (!tc.validationStatus) return null;
+    const badge = VALIDATION_BADGES[tc.validationStatus];
+    return (
+      <span title={badge.title} className={`ml-2 inline-block align-middle text-[11px] px-1.5 py-0.5 rounded border font-normal ${badge.className}`}>
+        {badge.label}
+      </span>
+    );
+  };
+
+  const renderCaseTable = (cases: TestCase[]) => (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="bg-gray-50 text-gray-500 text-left">
+          <th className="px-4 py-3 w-10"></th>
+          <th className="px-4 py-3 font-medium">ชื่อชุดทดสอบ</th>
+          <th className="px-4 py-3 font-medium">ประเภท</th>
+          <th className="px-4 py-3 font-medium">ผลล่าสุด</th>
+          <th className="px-4 py-3 font-medium">แก้ไขล่าสุด</th>
+          <th className="px-4 py-3 font-medium">จัดการ</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-gray-100">
+        {cases.map(tc => (
+          <tr key={tc.id} className="hover:bg-gray-50 align-top">
+            <td className="px-4 py-3">
+              <input
+                type="checkbox"
+                checked={selectedIds.includes(tc.id)}
+                onChange={() => toggleSelect(tc.id)}
+                className="rounded"
+              />
+            </td>
+            <td className="px-4 py-3 text-gray-800 font-medium">
+              {tc.title}
+              {validationBadge(tc)}
+              {tc.validationStatus && tc.validationStatus !== 'verified' && tc.validationReason && (
+                <p className="mt-1 text-xs font-normal text-gray-500 break-words">{tc.validationReason}</p>
+              )}
+              {tc.validationStatus && tc.validationStatus !== 'verified' && (tc.validationEvidence?.length ?? 0) > 0 && (
+                <p className="mt-1 text-xs font-normal space-x-3">
+                  {tc.validationEvidence!.map(url => (
+                    <a key={url} href={url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                      {evidenceLabel(url)}
+                    </a>
+                  ))}
+                </p>
+              )}
+            </td>
+            <td className="px-4 py-3">
+              <span className={`text-xs px-2 py-1 rounded-full ${tc.type === 'UI' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>
+                {tc.type}
+              </span>
+            </td>
+            <td className="px-4 py-3">{statusBadge(tc.lastStatus)}</td>
+            <td className="px-4 py-3 text-gray-400 text-xs">
+              {tc.lastRunAt ? new Date(toMillis(tc.lastRunAt)).toLocaleDateString('th-TH') : '-'}
+            </td>
+            <td className="px-4 py-3">
+              <button
+                onClick={() => { setEditingCase(tc); setEditedScript(tc.script); }}
+                className="text-blue-500 hover:underline text-xs"
+              >
+                ดู/แก้ไขโค้ด
+              </button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 
   const statusBadge = (status: string) => {
     const map: Record<string, string> = {
@@ -950,59 +1040,34 @@ export default function TestCasesPage() {
         </section>
 
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          {filteredCases.length === 0 ? (
+          {mainCases.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">
               {!activeProjectId
                 ? 'กรุณาเลือกโปรเจค'
-                : areTestCasesLoaded ? 'ยังไม่มีชุดทดสอบในโปรเจคนี้' : 'กำลังโหลดชุดทดสอบ...'}
+                : !areTestCasesLoaded
+                  ? 'กำลังโหลดชุดทดสอบ...'
+                  : reviewCases.length > 0 ? 'ยังไม่มีชุดทดสอบที่ยืนยันแล้ว ดูรายการที่ต้องตรวจสอบด้านล่าง' : 'ยังไม่มีชุดทดสอบในโปรเจคนี้'}
             </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-gray-500 text-left">
-                  <th className="px-4 py-3 w-10"></th>
-                  <th className="px-4 py-3 font-medium">ชื่อชุดทดสอบ</th>
-                  <th className="px-4 py-3 font-medium">ประเภท</th>
-                  <th className="px-4 py-3 font-medium">ผลล่าสุด</th>
-                  <th className="px-4 py-3 font-medium">แก้ไขล่าสุด</th>
-                  <th className="px-4 py-3 font-medium">จัดการ</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredCases.map(tc => (
-                  <tr key={tc.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(tc.id)}
-                        onChange={() => toggleSelect(tc.id)}
-                        className="rounded"
-                      />
-                    </td>
-                    <td className="px-4 py-3 text-gray-800 font-medium">{tc.title}</td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-1 rounded-full ${tc.type === 'UI' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>
-                        {tc.type}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">{statusBadge(tc.lastStatus)}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">
-                      {tc.lastRunAt ? new Date(toMillis(tc.lastRunAt)).toLocaleDateString('th-TH') : '-'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() => { setEditingCase(tc); setEditedScript(tc.script); }}
-                        className="text-blue-500 hover:underline text-xs"
-                      >
-                        ดู/แก้ไขโค้ด
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          ) : renderCaseTable(mainCases)}
         </div>
+
+        {reviewCases.length > 0 && (
+          <section className="mt-4 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowReviewCases(value => !value)}
+              aria-expanded={showReviewCases}
+              className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
+            >
+              <span className="text-sm font-medium text-gray-700">
+                ต้องตรวจสอบ ({reviewCases.length})
+                <span className="ml-2 text-xs font-normal text-gray-400">ชุดทดสอบที่รันตรวจก่อนบันทึกแล้วยืนยันไม่ได้ พร้อมเหตุผล</span>
+              </span>
+              <span className="text-xs text-blue-600">{showReviewCases ? 'ซ่อน' : 'แสดง'}</span>
+            </button>
+            {showReviewCases && renderCaseTable(reviewCases)}
+          </section>
+        )}
       </div>
 
       {/* Edit Modal */}

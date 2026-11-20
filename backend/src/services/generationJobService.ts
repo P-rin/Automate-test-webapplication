@@ -23,7 +23,9 @@ import { discoverPreconditionSnapshots } from "./ecommerce/preconditionDiscovery
 import { compileStoredCase, parseStoredStructuredCase } from "./ecommerce/storedCase.js";
 import { createPlaywrightSpecRunner } from "./ecommerce/specRunner.js";
 import { validateCase } from "./ecommerce/validationRun.js";
-import { appendFile, mkdir } from "node:fs/promises";
+import { publishArtifacts } from "./artifactPublisher.js";
+import { appendFile, mkdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 export { findBestSnapshotForCriterion } from "./criterionMatching.js";
 
@@ -593,13 +595,24 @@ export const generateCaseScript = async (
     const generated: GeneratedTestCase = { id: plan.id, title: compiled.title, script: compiled.script, requiresPlaywrightEngine: compiled.requiresPlaywrightEngine };
     if (!job || !env.ecommerceValidationRun) return generated;
     // Phase 8: run the case once against the site; auto-repair may replace the script.
-    const outcome = await validateCase({
-      title: plan.title,
-      category: plan.category ?? "",
-      stored: structured,
-      snapshot: payload.accessibilitySnapshot,
-      allowMutatingTests: job.allowMutatingTests === true,
-    }, createPlaywrightSpecRunner({ credentials: await getJobCredentials(jobId) }));
+    const validationDir = path.resolve(process.cwd(), "runtime", "validation", jobId, randomUUID());
+    let outcome: Awaited<ReturnType<typeof validateCase>>;
+    try {
+      outcome = await validateCase({
+        title: plan.title,
+        category: plan.category ?? "",
+        stored: structured,
+        snapshot: payload.accessibilitySnapshot,
+        allowMutatingTests: job.allowMutatingTests === true,
+      }, createPlaywrightSpecRunner({ credentials: await getJobCredentials(jobId), rootDir: validationDir }));
+      // Evidence of a failed run is served like test-run artifacts; the run directories are then removed.
+      if (outcome.evidence.length > 0) {
+        const published = await publishArtifacts(`validation-${jobId}`, outcome.evidence, env.port);
+        outcome = { ...outcome, evidence: [...published.screenshotUrls, ...published.traceUrls, ...published.videoUrls] };
+      }
+    } finally {
+      await rm(validationDir, { recursive: true, force: true }).catch(() => undefined);
+    }
     try {
       options.metricsHooks?.onValidationRun?.({ status: outcome.status, repaired: Object.keys(outcome.repairedLocators).length > 0 });
     } catch {

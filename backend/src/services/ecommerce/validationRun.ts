@@ -81,6 +81,18 @@ export const failingElementId = (compiled: CompiledCase, classification: Failure
 
 const NEGATIVE_LIKE = new Set(["negative", "validation", "boundary", "access_control"]);
 
+const CATEGORY_TH: Record<string, string> = {
+  happy_path: "กรณีปกติ", negative: "กรณีผิดปกติ", validation: "การตรวจสอบข้อมูล", boundary: "ค่าขอบเขต",
+  access_control: "สิทธิ์การเข้าถึง", exploratory: "สำรวจ",
+};
+const ROLE_TH: Record<string, string> = {
+  button: "ปุ่ม", link: "ลิงก์", textbox: "ช่อง", searchbox: "ช่องค้นหา", spinbutton: "ช่องตัวเลข", combobox: "dropdown",
+  checkbox: "checkbox", heading: "หัวข้อ", text: "ข้อความ",
+};
+
+/** Playwright's own message, kept as the technical detail after the Thai explanation. */
+const detail = (message: string): string => (message ? ` — รายละเอียด: ${message}` : "");
+
 export const verdictForCheckFailure = (category: string): ValidationStatus =>
   NEGATIVE_LIKE.has(category) ? "possible_bug" : "oracle_unreliable";
 
@@ -129,22 +141,29 @@ export const validateCase = async (input: ValidationInput, runSpec: SpecRunner):
   });
 
   let compiled = compile();
+  /** e.g. ปุ่ม "Add to cart" (E11): how a user recognises the element. */
+  const describeElement = (id: string): string => {
+    const element = inventory.elements.find((candidate) => candidate.id === id);
+    if (!element) return id;
+    const label = (element.name || element.text || "").trim();
+    return `${ROLE_TH[element.role] ?? element.role}${label ? ` "${label}"` : ""} (${id})`;
+  };
   const outcome = (status: ValidationStatus, reason: string, runs: number, evidence: string[] = []): ValidationOutcome => ({
     status, reason, script: compiled.script, requiresPlaywrightEngine: compiled.requiresPlaywrightEngine,
     repairedLocators: { ...overrides }, runs, evidence,
   });
   if (!input.allowMutatingTests && clicksFinalOrder(compiled.script)) {
-    return outcome("needs_review", "not run: the case clicks an order confirmation/payment button and the job does not allow mutating tests", 0);
+    return outcome("needs_review", "ไม่ได้รัน: case นี้กดปุ่มยืนยันคำสั่งซื้อหรือชำระเงิน แต่ job ไม่อนุญาตให้ทดสอบที่เปลี่ยนข้อมูลจริง", 0);
   }
 
   const maxRepairs = input.maxRepairs ?? 2;
   for (let run = 1; ; run += 1) {
     const result = await runSpec(compiled.script);
     if (result.status === "passed") {
-      return outcome("verified", Object.keys(overrides).length > 0 ? `passed after auto-repair of ${Object.keys(overrides).join(", ")}` : "passed", run);
+      return outcome("verified", Object.keys(overrides).length > 0 ? `ผ่าน หลังเปลี่ยนวิธีหา ${Object.keys(overrides).map(describeElement).join(", ")} อัตโนมัติ` : "ผ่าน", run);
     }
     const message = stripAnsi(result.message ?? "").split("\n").slice(0, 4).join(" ").trim();
-    if (result.status === "error") return outcome("needs_review", `could not run: ${message || "runner error"}`, run, result.evidence);
+    if (result.status === "error") return outcome("needs_review", `รัน test ไม่ได้${detail(message || "runner error")}`, run, result.evidence);
 
     const classification = classifyFailure(compiled.script, result);
     if (classification.locatorProblem) {
@@ -158,17 +177,17 @@ export const validateCase = async (input: ValidationInput, runSpec: SpecRunner):
         compiled = compile();
         continue;
       }
-      return outcome("needs_review", `locator not found${elementId ? ` (${elementId})` : ""}${run > 1 ? ` after ${run - 1} repair(s)` : ""}: ${message}`, run, result.evidence);
+      return outcome("needs_review", `หา ${elementId ? describeElement(elementId) : "element"} บนหน้าเว็บไม่เจอ${run > 1 ? ` แม้ลองวิธีหาอื่นแล้ว ${run - 1} แบบ` : ""}${detail(message)}`, run, result.evidence);
     }
     if (classification.part === "setup") {
-      return outcome("needs_review", `${recipe ? "precondition or navigation" : "navigation"} failed: ${message}`, run, result.evidence);
+      return outcome("needs_review", `${recipe ? "เตรียมสถานะ (เช่น ตะกร้า) หรือเปิดหน้า" : "เปิดหน้า"}ไม่สำเร็จ จึงยังไม่ได้ทดสอบ${detail(message)}`, run, result.evidence);
     }
     if (classification.part === "steps") {
-      return outcome("needs_review", `a step failed: ${message}`, run, result.evidence);
+      return outcome("needs_review", `ขั้นตอนทดสอบทำไม่สำเร็จ${detail(message)}`, run, result.evidence);
     }
     const status = verdictForCheckFailure(input.category);
     return outcome(status, status === "possible_bug"
-      ? `the check failed on a ${input.category} case — the site may not handle it: ${message}`
-      : `the check failed on a ${input.category} case the site is expected to pass — review the check: ${message}`, run, result.evidence);
+      ? `ผลไม่ตรงตามที่คาดใน case ${CATEGORY_TH[input.category] ?? input.category}: เว็บอาจไม่ได้จัดการกรณีนี้ (ให้ผู้ใช้ตรวจสอบหลักฐาน)${detail(message)}`
+      : `ผลไม่ตรงตามที่คาดใน case ${CATEGORY_TH[input.category] ?? input.category} ที่เว็บควรผ่าน: วิธีตรวจอาจไม่เหมาะกับเว็บนี้ ควรตรวจ assertion${detail(message)}`, run, result.evidence);
   }
 };

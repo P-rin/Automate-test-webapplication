@@ -17,7 +17,15 @@ export interface TestCase {
   lastStatus: 'pass' | 'fail' | 'flaky' | 'pending' | 'running';
   lastRunAt?: Date;
   createdAt: Date;
+  /** Result of the validation run before saving (GENERATION_MODE=ecommerce); absent on other cases. */
+  validationStatus?: ValidationStatus;
+  validationReason?: string;
+  /** URLs of the failed run's screenshot/trace. */
+  validationEvidence?: string[];
+  validationRepairedLocators?: Record<string, string>;
 }
+
+export type ValidationStatus = 'verified' | 'oracle_unreliable' | 'possible_bug' | 'needs_review';
 
 export interface TestRun {
   id: string;

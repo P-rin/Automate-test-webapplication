@@ -94,7 +94,7 @@ export interface GeneratedTestCase {
 export interface CaseValidation {
   status: "verified" | "oracle_unreliable" | "possible_bug" | "needs_review";
   reason: string;
-  /** Screenshot/trace files of a failed run (local paths under runtime/validation). */
+  /** URLs (under /static) of the screenshot/trace of a failed validation run. */
   evidence: string[];
   /** Element ID -> locator that auto-repair used instead of the compiled one. */
   repairedLocators: Record<string, string>;

@@ -67,7 +67,7 @@ test("a locator that finds nothing is replaced by an alternative and the case re
   assert.equal(outcome.runs, 2);
   const [repairedId] = Object.keys(outcome.repairedLocators);
   assert.ok(repairedId, "one element was repaired");
-  assert.match(outcome.reason, /auto-repair/);
+  assert.match(outcome.reason, /^ผ่าน หลังเปลี่ยนวิธีหา ช่อง "อีเมล" \(E\d+\) อัตโนมัติ$/);
   assert.notEqual(scripts[0], scripts[1]);
   assert.ok(scripts[1].includes(outcome.repairedLocators[repairedId]));
 });
@@ -78,13 +78,14 @@ test("repairs stop after maxRepairs and the case needs review", async () => {
   const outcome = await validateCase({ ...input(loginInvalid), maxRepairs: 2 }, runner);
   assert.equal(outcome.status, "needs_review");
   assert.equal(scripts.length, 3);
-  assert.match(outcome.reason, /^locator not found \(E\d+\) after 2 repair\(s\)/);
+  assert.match(outcome.reason, /^หา ช่อง "อีเมล" \(E\d+\) บนหน้าเว็บไม่เจอ แม้ลองวิธีหาอื่นแล้ว 2 แบบ — รายละเอียด: Error: locator\.fill/);
 });
 
 test("a failed check: possible bug for negative/validation cases, unreliable oracle for happy paths", async () => {
   const check = { pattern: /expect\.poll|toHave|toBe/, message: "Error: expect(received).toBe(expected)\n\nExpected: true\nReceived: false" };
   const negative = await validateCase(input(emailEmpty), failingRunner([check]).runner);
   assert.equal(negative.status, "possible_bug");
+  assert.match(negative.reason, /^ผลไม่ตรงตามที่คาดใน case การตรวจสอบข้อมูล: เว็บอาจไม่ได้จัดการกรณีนี้/);
   assert.deepEqual(negative.evidence, ["test-results/x/test-failed-1.png", "test-results/x/trace.zip"]);
   const happy = await validateCase(input(candidatesOf(login).find((candidate) => candidate.templateId === "auth.login_valid")!), failingRunner([check]).runner);
   assert.equal(happy.status, "oracle_unreliable");
@@ -98,7 +99,7 @@ test("a failing precondition makes the case need review, not a bug", async () =>
   const { runner } = failingRunner([{ pattern: /toHaveCount\(2, \{ timeout: 15_000 \}\);$/, message: "Error: expect(locator).toHaveCount(expected) failed\nExpected: 2\nReceived: 1" }]);
   const outcome = await validateCase(input(subtotal, cart, snapshot), runner);
   assert.equal(outcome.status, "needs_review");
-  assert.match(outcome.reason, /^precondition or navigation failed/);
+  assert.match(outcome.reason, /^เตรียมสถานะ \(เช่น ตะกร้า\) หรือเปิดหน้าไม่สำเร็จ/);
 });
 
 test("a case that would place an order is not run when mutating tests are not allowed", async () => {
