@@ -1,6 +1,6 @@
 import { db, FieldValue } from "../lib/firestore.js";
 import { toProjectId } from "../utils/project.js";
-import type { GeneratedArtifact } from "../types.js";
+import type { CaseValidation, GeneratedArtifact } from "../types.js";
 import { dropJobCache } from "./jobProgressCache.js";
 
 interface SaveTestInput {
@@ -17,6 +17,8 @@ interface SaveTestInput {
   pageId?: string;
   /** The script uses computed assertions the MCP engine cannot replay (GENERATION_MODE=ecommerce). */
   requiresPlaywrightEngine?: boolean;
+  /** Validation-run result (GENERATION_MODE=ecommerce, Phase 8). */
+  validation?: CaseValidation;
 }
 
 export interface ExecutionTestCase {
@@ -44,6 +46,14 @@ export const saveGeneratedTestCase = async (input: SaveTestInput): Promise<strin
     ...(input.generationCaseId ? { generationCaseId: input.generationCaseId } : {}),
     ...(input.pageId ? { pageId: input.pageId } : {}),
     ...(input.requiresPlaywrightEngine ? { requiresPlaywrightEngine: true } : {}),
+    ...(input.validation ? {
+      validationStatus: input.validation.status,
+      validationReason: input.validation.reason,
+      validationEvidence: input.validation.evidence,
+      validationRepairedLocators: input.validation.repairedLocators,
+      validationRuns: input.validation.runs,
+      validatedAt: FieldValue.serverTimestamp(),
+    } : {}),
     lastStatus: "pending",
     lastRunAt: null,
     createdAt: FieldValue.serverTimestamp(),

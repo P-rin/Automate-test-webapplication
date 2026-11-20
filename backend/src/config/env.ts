@@ -52,6 +52,8 @@ export const asGenerationMode = (value: string | undefined): GenerationMode => {
 
 export const env = {
   generationMode: asGenerationMode(process.env.GENERATION_MODE),
+  /** GENERATION_MODE=ecommerce: run each compiled case once against the site before saving it (Phase 8). */
+  ecommerceValidationRun: process.env.ECOMMERCE_VALIDATION_RUN !== "false",
   port: Number(process.env.PORT ?? 4000),
   screenshotHost: process.env.SCREENSHOT_HOST ?? "localhost",
   frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://localhost:5173",

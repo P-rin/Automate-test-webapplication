@@ -14,6 +14,7 @@
  */
 import type { GenerationMode } from "../../config/env.js";
 import type { TestPlan } from "../../types.js";
+import type { Oracle, StructuredStep } from "./types.js";
 import { createRunContext, processSnapshotTestPlans, type LlmGenerationOptions } from "../ollamaService.js";
 import { PlanCoverageRegistry } from "../planDedup.js";
 import { candidateToPlan, exploratoryToPlan, proposeExploratoryCases } from "./casePlan.js";
@@ -21,6 +22,7 @@ import { selectCandidates, type AskJson } from "./candidateSelector.js";
 import { classifyInventory, resolveAmbiguousPurposes } from "./elementClassifier.js";
 import { classifyPageType } from "./pageClassifier.js";
 import { parsePreconditionSection } from "./preconditions.js";
+import { checkCaseQuality } from "./qualityGate.js";
 import { buildInventory, compactSnapshotBudget, navigationKeysOf, renderInventoryForPrompt } from "./snapshotCompactor.js";
 import { generateCandidates } from "./templates/index.js";
 
@@ -124,8 +126,23 @@ export const createEcommerceSnapshotPlanner = (config: EcommercePlannerConfig = 
     for (const note of generation.notes) console.info(`[ecommerce] ${inventory.pageUrl}: ${note}`);
 
     let planCount = 0;
+    let qualityRejected = 0;
     const persist = async (plan: TestPlan): Promise<boolean> => {
       const origin = String(plan.structured?.origin ?? "");
+      // Phase 8a: drop cases that cannot tell a working site from a broken one, or are unsafe to run.
+      const quality = checkCaseQuality({
+        category: plan.category ?? "",
+        expectedResult: plan.expectedResult ?? "",
+        steps: Array.isArray(plan.structured?.steps) ? plan.structured.steps as StructuredStep[] : [],
+        ...(plan.structured?.oracle ? { oracle: plan.structured.oracle as Oracle } : {}),
+        inventory,
+        allowMutatingTests,
+      });
+      if (!quality.accepted) {
+        qualityRejected += 1;
+        console.info(`[ecommerce] quality gate dropped "${plan.title}" (${origin}): ${quality.issues.join(", ")}`);
+        return false;
+      }
       // Template variants are exact ("sort=name_asc" vs "sort=name_desc" are different cases), so the fuzzy
       // registry check that suits free-text LLM cases is used only for exploratory ones.
       const templateKey = origin.startsWith("template:") ? `${origin}|${plan.targetElement ?? ""}|${plan.inputVariant ?? ""}` : undefined;
@@ -183,6 +200,7 @@ export const createEcommerceSnapshotPlanner = (config: EcommercePlannerConfig = 
         byFallback: selection.stats.fallbackCandidates,
         exploratoryAccepted,
         exploratoryRejected: exploratory.rejected.length,
+        qualityRejected,
       });
     } catch {
       // Metrics must never break planning.

@@ -146,6 +146,40 @@ export const resolveLocator = (elementId: string, inventory: ElementInventory, f
   return `${scope ?? "page"}.${locatorCall(element)}${nth}`;
 };
 
+const TEST_ID_ATTRIBUTES = ["data-test", "data-testid", "data-test-id", "data-qa", "data-cy"];
+const INPUT_LIKE_ROLES = new Set(["textbox", "searchbox", "spinbutton", "combobox", "checkbox", "radio"]);
+
+/**
+ * Other ways to locate an element when its resolved locator found nothing at run time (Phase 8c), most
+ * specific first: role+name without exact matching, label, placeholder, test ID, visible text, and the
+ * page-wide role locator without the card scope. Never the resolved locator itself.
+ */
+export const alternativeLocators = (elementId: string, inventory: ElementInventory, fullSnapshot: string): string[] => {
+  const element = inventory.elements.find((candidate) => candidate.id === elementId);
+  if (!element) return [];
+  const primary = resolveLocator(elementId, inventory, fullSnapshot);
+  const group = element.groupId ? inventory.groups.find((candidate) => candidate.id === element.groupId) : undefined;
+  const scope = (group && containerScope(group)) ?? "page";
+  const name = element.name.trim();
+  const text = (element.text ?? "").replace(/…$/, "").trim();
+  const candidates: string[] = [];
+  if (name && !TEXT_ROLES.has(element.role)) {
+    candidates.push(`${scope}.getByRole(${quote(element.role)}, { name: ${quote(name)} }).first()`);
+    if (INPUT_LIKE_ROLES.has(element.role)) candidates.push(`${scope}.getByLabel(${quote(name)}).first()`);
+  }
+  if (element.attrs?.placeholder) candidates.push(`${scope}.getByPlaceholder(${quote(element.attrs.placeholder)}).first()`);
+  if (element.attrs?.testId) {
+    const selector = TEST_ID_ATTRIBUTES.map((attr) => `[${attr}=${quote(element.attrs!.testId!)}]`).join(", ");
+    candidates.push(`${scope}.locator(${quote(selector)}).first()`);
+  }
+  const visibleText = TEXT_ROLES.has(element.role) ? (name || text) : (text || name);
+  if (visibleText) candidates.push(`${scope}.getByText(${quote(visibleText)}).first()`);
+  if (scope !== "page" && name && !TEXT_ROLES.has(element.role)) {
+    candidates.push(`page.getByRole(${quote(element.role)}, { name: ${quote(name)}, exact: true }).first()`);
+  }
+  return [...new Set(candidates)].filter((candidate) => candidate !== primary);
+};
+
 /** `{{env.NAME}}` -> process.env.NAME ?? '' ; anything else -> a string literal. */
 export const valueExpression = (value: string): string => {
   const env = value.match(/^\{\{env\.([A-Za-z_][A-Za-z0-9_]*)\}\}$/);
@@ -162,11 +196,17 @@ export interface CompileContext {
   fullSnapshot: string;
   /** Compiled steps of precondition recipes by ID (Phase 7), compiled against their own page. */
   preconditions?: Record<string, CompiledSteps>;
+  /** Locators that replace the resolved ones for some element IDs (Phase 8 auto-repair). */
+  locatorOverrides?: Record<string, string>;
 }
+
+/** Locator of an element in a compile context: an auto-repair override, else the resolved locator. */
+export const contextLocator = (context: CompileContext) => (elementId: string): string =>
+  context.locatorOverrides?.[elementId] ?? resolveLocator(elementId, context.inventory, context.fullSnapshot);
 
 /** Steps -> code lines. Precondition steps expand to the recipe's compiled lines. */
 export const compileSteps = (steps: readonly StructuredStep[], context: CompileContext): string[] => {
-  const locate = (elementId: string) => resolveLocator(elementId, context.inventory, context.fullSnapshot);
+  const locate = contextLocator(context);
   return steps.flatMap((step): string[] => {
     switch (step.kind) {
       case "goto":
@@ -211,7 +251,26 @@ export interface CompiledCase {
   requiresPlaywrightEngine: boolean;
   /** Lines the MCP action parser could not translate. */
   mcpUnsupported: string[];
+  /** Locator expression of every element the steps and the oracle use (Phase 8 maps failures back to elements). */
+  locators: Record<string, string>;
 }
+
+/** Comment lines that split a compiled test body: failures are classified by the part they happen in (Phase 8). */
+export const STEPS_MARKER = "// --- steps";
+export const CHECK_MARKER = "// --- check";
+
+/** Element IDs a case refers to, in its steps and (recursively) its oracle. */
+export const referencedElementIds = (testCase: Pick<CompilableCase, "steps" | "oracle">): string[] => {
+  const ids = new Set<string>();
+  for (const step of testCase.steps) if ("elementId" in step) ids.add(step.elementId);
+  const visit = (value: unknown, key = ""): void => {
+    if (typeof value === "string" && /elementid$/i.test(key)) ids.add(value);
+    else if (Array.isArray(value)) value.forEach((item) => visit(item, /elementids$/i.test(key) ? "elementId" : key));
+    else if (value && typeof value === "object") for (const [childKey, child] of Object.entries(value)) visit(child, childKey);
+  };
+  visit(testCase.oracle);
+  return [...ids];
+};
 
 const INDENT = "  ";
 
@@ -235,7 +294,7 @@ const orderedSteps = (testCase: CompilableCase, inventory: ElementInventory): St
 export const compileCase = (testCase: CompilableCase, context: CompileContext): CompiledCase => {
   const title = testCase.titleTh.replace(/\s+/g, " ").trim();
   if (!title) throw new LocatorResolutionError("Case has no title");
-  const locate = (elementId: string) => resolveLocator(elementId, context.inventory, context.fullSnapshot);
+  const locate = contextLocator(context);
   const oracle: CompiledOracle = compileOracle(testCase.oracle, {
     locate,
     startUrl: context.inventory.pageUrl,
@@ -250,8 +309,10 @@ export const compileCase = (testCase: CompilableCase, context: CompileContext): 
   const actionSteps = firstOwnStep < 0 ? [] : steps.slice(firstOwnStep);
   const body = [
     ...compileSteps(setupSteps, context),
+    STEPS_MARKER,
     ...oracle.before,
     ...compileSteps(actionSteps, context),
+    CHECK_MARKER,
     ...oracle.after,
   ];
 
@@ -281,5 +342,6 @@ export const compileCase = (testCase: CompilableCase, context: CompileContext): 
   if (oracle.helpers.length > 0 || oracle.before.length > 0 || /expect\.poll\(/.test(script)) {
     mcpUnsupported.push(`Computed oracle ${testCase.oracle.kind} runs only on the playwright engine`);
   }
-  return { title, script, requiresPlaywrightEngine: mcpUnsupported.length > 0, mcpUnsupported };
+  const locators = Object.fromEntries(referencedElementIds(testCase).map((id) => [id, locate(id)]));
+  return { title, script, requiresPlaywrightEngine: mcpUnsupported.length > 0, mcpUnsupported, locators };
 };

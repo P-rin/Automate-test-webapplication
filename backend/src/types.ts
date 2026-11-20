@@ -87,4 +87,16 @@ export interface GeneratedTestCase {
   script: string;
   /** Compiled with computed assertions that only the Playwright engine runs (GENERATION_MODE=ecommerce). */
   requiresPlaywrightEngine?: boolean;
+  /** Validation-run result (GENERATION_MODE=ecommerce, Phase 8). */
+  validation?: CaseValidation;
+}
+
+export interface CaseValidation {
+  status: "verified" | "oracle_unreliable" | "possible_bug" | "needs_review";
+  reason: string;
+  /** Screenshot/trace files of a failed run (local paths under runtime/validation). */
+  evidence: string[];
+  /** Element ID -> locator that auto-repair used instead of the compiled one. */
+  repairedLocators: Record<string, string>;
+  runs: number;
 }

@@ -47,6 +47,8 @@ export interface PlanningMetrics {
   candidatesByFallback: number;
   exploratoryAccepted: number;
   exploratoryRejected: number;
+  /** ecommerce mode (Phase 8a): cases the quality gate dropped. */
+  qualityRejected: number;
   byCategory: Record<string, number>;
   byPage: Record<string, number>;
   byPageType: Record<string, number>;
@@ -58,6 +60,9 @@ export interface ScriptMetrics {
   validationFailedCount: number;
   casesSavedCount: number;
   casesFailedCount: number;
+  /** ecommerce mode (Phase 8b): validation-run verdicts of saved cases, and cases fixed by auto-repair. */
+  validationRunByStatus: Record<string, number>;
+  validationRunRepaired: number;
 }
 
 export interface GenerationMetricsSnapshot {
@@ -73,6 +78,7 @@ export interface GenerationMetricsHooks {
   onScriptAttempt?: (attempt: ScriptAttemptMetric) => void;
   onPromptReferenceMiss?: (miss: { text: string; inFullSnapshot: boolean }) => void;
   onCandidateStage?: (stage: CandidateStageMetric) => void;
+  onValidationRun?: (result: { status: string; repaired: boolean }) => void;
 }
 
 export interface CandidateStageMetric {
@@ -82,6 +88,7 @@ export interface CandidateStageMetric {
   byFallback: number;
   exploratoryAccepted: number;
   exploratoryRejected: number;
+  qualityRejected?: number;
 }
 
 const MAX_RECORDED_CALLS = 2000;
@@ -106,6 +113,7 @@ export class GenerationMetricsCollector {
     candidatesByFallback: 0,
     exploratoryAccepted: 0,
     exploratoryRejected: 0,
+    qualityRejected: 0,
     byCategory: {},
     byPage: {},
     byPageType: {},
@@ -117,6 +125,8 @@ export class GenerationMetricsCollector {
     validationFailedCount: 0,
     casesSavedCount: 0,
     casesFailedCount: 0,
+    validationRunByStatus: {},
+    validationRunRepaired: 0,
   };
 
   private readonly llm: Record<LlmCallStage, LlmCallAggregate> = { planner: emptyAggregate(), script: emptyAggregate() };
@@ -131,7 +141,13 @@ export class GenerationMetricsCollector {
     onScriptAttempt: (attempt) => this.recordScriptAttempt(attempt),
     onPromptReferenceMiss: (miss) => this.recordPromptReferenceMiss(miss.inFullSnapshot),
     onCandidateStage: (stage) => this.recordCandidateStage(stage),
+    onValidationRun: (result) => this.recordValidationRun(result),
   };
+
+  recordValidationRun(result: { status: string; repaired: boolean }): void {
+    increment(this.script.validationRunByStatus, result.status);
+    if (result.repaired) this.script.validationRunRepaired += 1;
+  }
 
   recordPlanned(input: { category?: string; page: string; pageType?: string }): void {
     this.planning.plannedCount += 1;
@@ -157,6 +173,7 @@ export class GenerationMetricsCollector {
     this.planning.candidatesByFallback += stage.byFallback;
     this.planning.exploratoryAccepted += stage.exploratoryAccepted;
     this.planning.exploratoryRejected += stage.exploratoryRejected;
+    this.planning.qualityRejected += stage.qualityRejected ?? 0;
   }
 
   recordStalledSnapshot(): void {

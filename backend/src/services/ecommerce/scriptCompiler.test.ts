@@ -199,7 +199,7 @@ test("precondition steps come first, then the page's navigation path, then the c
     steps: [{ kind: "click", elementId: sauce.id(named("button", "Add to cart", "G1")) }],
     oracle: { kind: "elementHidden", elementId: sauce.id(named("button", "Add to cart", "G1")) },
   }, { ...sauce.context, preconditions: { logged_in: precondition } });
-  const body = compiled.script.split("\n").filter((line) => line.startsWith("  ")).map((line) => line.trim());
+  const body = compiled.script.split("\n").filter((line) => line.startsWith("  ")).map((line) => line.trim()).filter((line) => !line.startsWith("// ---"));
   assert.deepEqual(body.slice(0, 3), [
     ...precondition.lines,
     "await page.goto(\"https://www.saucedemo.com/inventory.html\");",
@@ -223,7 +223,7 @@ test("SPA pages: navigation path clicks are replayed and reloads re-navigate", (
     steps: [],
     oracle: { kind: "persistsAfterReload", inner: { kind: "elementVisible", elementId: rcw.id(named("button", "ลบสินค้า")) } },
   }, { inventory: spa, fullSnapshot: rcw.snapshot });
-  const body = compiled.script.split("\n").map((line) => line.trim());
+  const body = compiled.script.split("\n").map((line) => line.trim()).filter((line) => !line.startsWith("// ---"));
   const reload = body.indexOf("await page.reload();");
   assert.ok(reload > 0);
   assert.match(body[1 + body.indexOf("await page.goto(\"http://localhost:5173/\");")], /ตะกร้าสินค้า.*\.click\(\);/);

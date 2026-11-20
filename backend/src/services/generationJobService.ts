@@ -21,6 +21,8 @@ import { GenerationMetricsCollector, metricIncrements } from "./generationMetric
 import { selectSnapshotPlanner } from "./ecommerce/pipeline.js";
 import { discoverPreconditionSnapshots } from "./ecommerce/preconditionDiscovery.js";
 import { compileStoredCase, parseStoredStructuredCase } from "./ecommerce/storedCase.js";
+import { createPlaywrightSpecRunner } from "./ecommerce/specRunner.js";
+import { validateCase } from "./ecommerce/validationRun.js";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 export { findBestSnapshotForCriterion } from "./criterionMatching.js";
@@ -568,6 +570,8 @@ export const generateCaseScript = async (
   plan: TestPlan,
   generationCase: Record<string, unknown>,
   options: LlmGenerationOptions,
+  /** The job, for the validation run (credentials, allowMutatingTests); omitted = no validation run. */
+  job?: Record<string, unknown>,
 ): Promise<GeneratedTestCase> => {
   const structured = parseStoredStructuredCase(generationCase.structured);
   if (!structured) {
@@ -586,7 +590,28 @@ export const generateCaseScript = async (
   try {
     const compiled = compileStoredCase(plan.title, structured, payload.accessibilitySnapshot);
     report({ attempt: 1, passed: true });
-    return { id: plan.id, title: compiled.title, script: compiled.script, requiresPlaywrightEngine: compiled.requiresPlaywrightEngine };
+    const generated: GeneratedTestCase = { id: plan.id, title: compiled.title, script: compiled.script, requiresPlaywrightEngine: compiled.requiresPlaywrightEngine };
+    if (!job || !env.ecommerceValidationRun) return generated;
+    // Phase 8: run the case once against the site; auto-repair may replace the script.
+    const outcome = await validateCase({
+      title: plan.title,
+      category: plan.category ?? "",
+      stored: structured,
+      snapshot: payload.accessibilitySnapshot,
+      allowMutatingTests: job.allowMutatingTests === true,
+    }, createPlaywrightSpecRunner({ credentials: await getJobCredentials(jobId) }));
+    try {
+      options.metricsHooks?.onValidationRun?.({ status: outcome.status, repaired: Object.keys(outcome.repairedLocators).length > 0 });
+    } catch {
+      // Metrics must never break generation.
+    }
+    console.info(`[generation ${jobId}] validation run "${plan.title}": ${outcome.status} (${outcome.reason.slice(0, 200)})`);
+    return {
+      ...generated,
+      script: outcome.script,
+      requiresPlaywrightEngine: outcome.requiresPlaywrightEngine,
+      validation: { status: outcome.status, reason: outcome.reason, evidence: outcome.evidence, repairedLocators: outcome.repairedLocators, runs: outcome.runs },
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     report({ attempt: 1, passed: false, reason: message });
@@ -629,7 +654,7 @@ const generateAndSaveCaseScript = async (
     specification,
     accessibilitySnapshot,
     acceptanceCriteria,
-  }, plan, generationCase, options);
+  }, plan, generationCase, options, job);
   const testCaseId = await saveGeneratedTestCase({
     projectName,
     url: targetUrl,
@@ -643,6 +668,7 @@ const generateAndSaveCaseScript = async (
     ownerUid: String(job.ownerUid),
     ...(typeof generationCase.pageId === "string" ? { pageId: generationCase.pageId } : {}),
     ...(generated.requiresPlaywrightEngine ? { requiresPlaywrightEngine: true } : {}),
+      ...(generated.validation ? { validation: generated.validation } : {}),
   });
 
   await updateGenerationCaseFields(jobId, caseId, {
@@ -1018,7 +1044,7 @@ export const retryFailedGenerationCase = async (
       specification,
       accessibilitySnapshot,
       acceptanceCriteria,
-    }, plan, generationCase, options);
+    }, plan, generationCase, options, job);
     const testCaseId = await saveGeneratedTestCase({
       projectName,
       url: targetUrl,
@@ -1031,6 +1057,7 @@ export const retryFailedGenerationCase = async (
       ownerUid,
       ...(typeof generationCase.pageId === "string" ? { pageId: generationCase.pageId } : {}),
       ...(generated.requiresPlaywrightEngine ? { requiresPlaywrightEngine: true } : {}),
+      ...(generated.validation ? { validation: generated.validation } : {}),
     });
 
     await caseRef.update({
